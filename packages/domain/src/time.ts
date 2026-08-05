@@ -1,0 +1,105 @@
+import { type TickIndex, clamp, toInt } from './units.js';
+
+/**
+ * Logical time.
+ *
+ * Inside the simulation, time is an integer tick index. Wall-clock instants only appear at
+ * I/O boundaries and are always UTC ISO-8601 strings.
+ */
+
+/** An ISO-8601 UTC timestamp such as `2026-01-01T00:00:00.000Z`. */
+export type IsoInstant = string;
+
+/** Port supplying wall-clock time to infrastructure code. Never used inside a tick. */
+export interface Clock {
+  nowIso(): IsoInstant;
+  nowEpochMs(): number;
+}
+
+/** A clock frozen at a fixed instant, used by tests. */
+export class FixedClock implements Clock {
+  #epochMs: number;
+
+  constructor(startIso: IsoInstant) {
+    this.#epochMs = Date.parse(startIso);
+    if (Number.isNaN(this.#epochMs)) {
+      throw new RangeError(`FixedClock requires a valid ISO instant, received ${startIso}`);
+    }
+  }
+
+  nowIso(): IsoInstant {
+    return new Date(this.#epochMs).toISOString();
+  }
+
+  nowEpochMs(): number {
+    return this.#epochMs;
+  }
+
+  /** Advance the frozen clock. Tests use this to exercise lease and claim expiry. */
+  advanceMs(deltaMs: number): void {
+    this.#epochMs += toInt(deltaMs);
+  }
+}
+
+/** Calendar shape of a world: how many ticks make up a day and a season. */
+export interface WorldCalendar {
+  /** Logical ticks in one full day/night cycle. */
+  readonly ticksPerDay: number;
+  /** Logical ticks between scheduled environmental pressure events. */
+  readonly ticksPerPressureCycle: number;
+  /** Simulated minutes represented by a single tick. Presentation only. */
+  readonly simulatedMinutesPerTick: number;
+}
+
+export const DEFAULT_CALENDAR: WorldCalendar = {
+  ticksPerDay: 96,
+  ticksPerPressureCycle: 480,
+  simulatedMinutesPerTick: 15,
+};
+
+/** Position within the day/night cycle, in per-mille of a full day. */
+export function dayPhasePerMille(tick: TickIndex, calendar: WorldCalendar): number {
+  const period = Math.max(1, toInt(calendar.ticksPerDay));
+  const phase = ((toInt(tick) % period) + period) % period;
+  return Math.trunc((phase * 1000) / period);
+}
+
+/**
+ * Ambient light for a tick, in per-mille.
+ *
+ * A triangular curve is used rather than a sine so that the value is exactly reproducible
+ * with integer arithmetic. Night is not fully dark: a floor of 60‰ models starlight.
+ */
+export function ambientLightPerMille(tick: TickIndex, calendar: WorldCalendar): number {
+  const phase = dayPhasePerMille(tick, calendar);
+  const daylight = phase < 500 ? phase * 2 : (1000 - phase) * 2;
+  return Math.trunc(clamp(60 + (daylight * 940) / 1000, 0, 1000));
+}
+
+/** Index of the pressure cycle a tick belongs to. Used to schedule environmental events. */
+export function pressureCycleIndex(tick: TickIndex, calendar: WorldCalendar): number {
+  const period = Math.max(1, toInt(calendar.ticksPerPressureCycle));
+  return Math.floor(toInt(tick) / period);
+}
+
+/** True when a tick begins a new environmental pressure cycle. */
+export function isPressureBoundary(tick: TickIndex, calendar: WorldCalendar): boolean {
+  const period = Math.max(1, toInt(calendar.ticksPerPressureCycle));
+  return toInt(tick) > 0 && toInt(tick) % period === 0;
+}
+
+/**
+ * Storage epoch for a tick.
+ *
+ * Epochs bucket append-only rows so no Table partition grows without bound.
+ */
+export const TICKS_PER_EPOCH = 1000;
+
+export function epochOfTick(tick: TickIndex): number {
+  return Math.floor(Math.max(0, toInt(tick)) / TICKS_PER_EPOCH);
+}
+
+/** Zero-padded tick string used for lexicographic row-key ordering. */
+export function tickKey(tick: TickIndex): string {
+  return String(Math.max(0, toInt(tick))).padStart(12, '0');
+}

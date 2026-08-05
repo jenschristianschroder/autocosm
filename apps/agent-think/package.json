@@ -1,0 +1,19 @@
+{
+  "name": "@autocosm/agent-think",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node ./dist/main.js"
+  },
+  "dependencies": {
+    "@autocosm/agent-runtime": "^0.1.0",
+    "@autocosm/domain": "^0.1.0",
+    "@autocosm/observability": "^0.1.0",
+    "@autocosm/simulation": "^0.1.0",
+    "@autocosm/storage": "^0.1.0",
+    "zod": "^4.4.3"
+  }
+}

@@ -1,0 +1,55 @@
+{
+  "name": "autocosm",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "A persistent, browser-based 3D evolutionary world inhabited and changed by autonomous AI agents.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "clean": "node scripts/clean.mjs",
+    "dev": "node scripts/dev.mjs",
+    "seed": "npm run seed -w @autocosm/world-tick",
+    "tick:once": "npm run start -w @autocosm/world-tick",
+    "think:once": "npm run start -w @autocosm/agent-think",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "typecheck": "tsc --build tsconfig.build.json",
+    "test": "vitest run",
+    "test:code": "vitest run --project domain --project simulation --project storage --project agent-runtime --project observability --project world-web --project world-tick --project agent-think --project web-client",
+    "test:unit": "vitest run --project domain --project simulation --project observability --project agent-runtime",
+    "test:integration": "vitest run --project storage --project world-web --project infra",
+    "test:watch": "vitest",
+    "test:browser": "playwright test",
+    "test:browser:install": "playwright install --with-deps chromium",
+    "docker:build": "docker build -t autocosm:local .",
+    "docker:run:web": "docker run --rm -p 8080:8080 --env-file .env autocosm:local web",
+    "docker:run:tick": "docker run --rm --env-file .env autocosm:local tick",
+    "docker:run:think": "docker run --rm --env-file .env autocosm:local think",
+    "infra:build": "node scripts/bicep-build.mjs",
+    "scan:secrets": "node scripts/scan-secrets.mjs",
+    "verify": "npm run format:check && npm run lint && npm run typecheck && npm run test && npm run scan:secrets && npm run build"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0-alpha-2026-07-28",
+    "@types/node": "^26.1.2",
+    "@vitest/coverage-v8": "^4.1.10",
+    "eslint": "^10.8.0",
+    "globals": "^17.8.0",
+    "prettier": "^3.9.6",
+    "typescript": "^6.0.3",
+    "typescript-eslint": "^8.65.1-alpha.9",
+    "vitest": "^4.1.10"
+  },
+  "overrides": {}
+}

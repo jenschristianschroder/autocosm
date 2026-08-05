@@ -1,0 +1,23 @@
+# Normalise text files in the repository so a Windows checkout cannot change file contents.
+* text=auto eol=lf
+
+# Shell scripts run inside a Linux container. A CRLF here makes the kernel try to exec
+# `/bin/sh\r`, which fails with the memorably unhelpful "no such file or directory".
+*.sh text eol=lf
+docker-entrypoint.sh text eol=lf
+Dockerfile text eol=lf
+
+# Windows-only files keep CRLF.
+*.cmd text eol=crlf
+*.bat text eol=crlf
+*.ps1 text eol=crlf
+
+# Never touch binaries.
+*.png binary
+*.jpg binary
+*.ico binary
+*.woff binary
+*.woff2 binary
+
+# Generated; keep them out of diffs.
+package-lock.json linguist-generated=true -diff

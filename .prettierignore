@@ -1,0 +1,12 @@
+node_modules
+dist
+build
+coverage
+playwright-report
+test-results
+infra/generated
+infra/.build
+apps/world-web/public
+package-lock.json
+*.tsbuildinfo
+.autocosm-local

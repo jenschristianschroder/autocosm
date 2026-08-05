@@ -1,0 +1,16 @@
+{
+  "extends": "../../tsconfig.base.json",
+  "compilerOptions": {
+    "outDir": "./dist",
+    "rootDir": "./src",
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "references": [
+    { "path": "../../packages/domain" },
+    { "path": "../../packages/simulation" },
+    { "path": "../../packages/storage" },
+    { "path": "../../packages/agent-runtime" },
+    { "path": "../../packages/observability" }
+  ]
+}

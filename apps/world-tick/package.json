@@ -1,0 +1,19 @@
+{
+  "name": "@autocosm/world-tick",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/main.js",
+  "scripts": {
+    "build": "tsc -b",
+    "start": "node ./dist/main.js",
+    "seed": "node ./dist/seed.js"
+  },
+  "dependencies": {
+    "@autocosm/domain": "^0.1.0",
+    "@autocosm/observability": "^0.1.0",
+    "@autocosm/simulation": "^0.1.0",
+    "@autocosm/storage": "^0.1.0",
+    "zod": "^4.4.3"
+  }
+}

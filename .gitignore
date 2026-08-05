@@ -1,0 +1,38 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+*.tsbuildinfo
+.vite/
+# Vite emits the compiled browser bundle here for world-web to serve.
+apps/world-web/public/
+
+# Test artifacts
+coverage/
+playwright-report/
+test-results/
+blob-report/
+.playwright/
+
+# Local runtime state
+.autocosm-local/
+__azurite_db*__.json
+*.azurite
+
+# Generated infrastructure artifacts
+infra/generated/
+infra/.build/
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/*
+!.vscode/extensions.json
