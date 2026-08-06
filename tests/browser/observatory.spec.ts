@@ -88,6 +88,22 @@ test('an observer can watch the world, author a lineage, and offer it a goal', a
   await expect(page.locator('.panel--lineage')).toBeVisible({ timeout: 30_000 });
   await page.locator('.panel--lineage').getByRole('button', { name: 'Close' }).click();
 
+  /* ------------------------------------------------------------- field guide */
+
+  // The glossary is what answers "what does this building do" without a model. It is served from
+  // the domain's own rule tables, so an empty or partial panel means the derivation broke.
+  await page.getByRole('button', { name: 'Field guide' }).click();
+  const guide = page.locator('.panel--glossary');
+  await expect(guide).toBeVisible({ timeout: 30_000 });
+  await expect(guide.getByRole('heading', { name: 'What buildings do' })).toBeVisible();
+  expect(await guide.locator('.definitions > li').count()).toBeGreaterThanOrEqual(70);
+
+  // Searching narrows it rather than emptying it.
+  await guide.getByRole('searchbox').fill('shelter');
+  await expect(guide.locator('.definitions > li').first()).toBeVisible();
+  await guide.getByRole('button', { name: 'Close' }).click();
+  await expect(guide).toBeHidden();
+
   /* ---------------------------------------------------------------- authoring */
 
   await page.getByRole('button', { name: 'Author a lineage' }).first().click();

@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
-import { fetchAgent, fetchOrganism } from '../api';
+import { fetchAgent, fetchOrganism, fetchStructure } from '../api';
+import { lineageColour } from '../lineage-colour';
 import type {
   AgentDetailResponse,
   OrganismDetailResponse,
   Selection,
   SnapshotResponse,
+  StructureDetailResponse,
 } from '../types';
 
 /**
@@ -30,6 +32,7 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
   const { selection } = props;
   const [agent, setAgent] = useState<AgentDetailResponse>();
   const [organism, setOrganism] = useState<OrganismDetailResponse>();
+  const [structure, setStructure] = useState<StructureDetailResponse>();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -40,6 +43,7 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
     if (selection.kind === 'none') {
       setAgent(undefined);
       setOrganism(undefined);
+      setStructure(undefined);
       return;
     }
 
@@ -58,11 +62,16 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
               setAgent(detail);
               setOrganism(undefined);
             })
-          : Promise.resolve();
+          : fetchStructure(selection.id).then((detail) => {
+              if (!cancelled) setStructure(detail);
+            });
 
     void work
       .catch((cause: unknown) => {
         if (!cancelled) {
+          // A structure that has decayed away is gone, not broken; say so rather than showing a
+          // transport error the observer can do nothing about.
+          if (selection.kind === 'structure') setStructure(undefined);
           setError(cause instanceof Error ? cause.message : 'Could not load details.');
         }
       })
@@ -88,47 +97,94 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
   }
 
   if (selection.kind === 'structure') {
-    const structure = props.snapshot?.structures.find((s) => s.id === selection.id);
+    const summary = props.snapshot?.structures.find((s) => s.id === selection.id);
+    const title = structure?.label ?? summary?.label ?? 'Structure';
     return (
       <aside className="panel panel--inspector" aria-label="Inspector">
         <header className="panel__header">
-          <h2>{structure?.label ?? 'Structure'}</h2>
+          <h2>{title}</h2>
           <FollowButton following={props.following} onToggle={props.onToggleFollow} />
         </header>
-        {!structure && <p className="muted">This structure is outside the current view.</p>}
+        {loading && !structure && <p className="muted">Loading…</p>}
+        {error !== undefined && <p className="error">{error}</p>}
+        {!loading && !structure && error === undefined && (
+          <p className="muted">This structure no longer stands.</p>
+        )}
         {structure && (
           <>
+            <p className="muted small">
+              {structure.createdByLineageHue !== undefined && (
+                <span
+                  className="roster__swatch"
+                  style={{ background: lineageColour(structure.createdByLineageHue) }}
+                />
+              )}{' '}
+              Built by{' '}
+              <button
+                type="button"
+                className="link"
+                onClick={() => props.onSelect({ kind: 'agent', id: structure.createdByAgentId })}
+              >
+                {structure.createdByAgentName ?? structure.createdByAgentId}
+              </button>{' '}
+              at tick {structure.createdAtTick}.
+            </p>
             <dl className="facts">
               <Fact label="Pattern" value={structure.pattern} />
               <Fact label="Integrity" value={perMille(structure.integrity)} />
               <Fact label="Volume" value={`${structure.volume} cm³`} />
-              <Fact label="Built at tick" value={String(structure.createdAtTick)} />
+              <Fact
+                label="Decay"
+                value={`${structure.decayPerTick}‰ per tick · collapses ~${structure.collapsesAtTick}`}
+              />
             </dl>
-            <h3>Derived functions</h3>
-            {structure.functions.length === 0 ? (
+
+            <h3>Made of</h3>
+            <ul className="chips">
+              {structure.components.map((component) => (
+                <li key={component.materialId} className="chip" title={component.subtitle}>
+                  {component.label} × {component.quantity}
+                </li>
+              ))}
+            </ul>
+
+            <h3>What it does</h3>
+            {structure.derivedFunctions.length === 0 ? (
               <p className="muted">
                 Its materials do not combine into any working function. It is inert.
               </p>
             ) : (
-              <ul className="chips">
-                {structure.functions.map((fn) => (
-                  <li key={fn.id} className="chip">
-                    {fn.id} · {perMille(fn.magnitude)}
+              <ul className="definitions">
+                {structure.derivedFunctions.map((fn) => (
+                  <li key={fn.id}>
+                    <strong>{fn.label}</strong>{' '}
+                    <span className="muted small">
+                      {perMille(fn.effectiveMagnitude)} of {perMille(fn.magnitude)}
+                    </span>
+                    <p className="small">{fn.summary}</p>
+                    <p className="muted small">Requires: {fn.requirement}</p>
                   </li>
                 ))}
               </ul>
             )}
+
+            <h3>Who has used it</h3>
+            {structure.usage.length === 0 ? (
+              <p className="muted">Nothing has used it yet.</p>
+            ) : (
+              <ul className="chips">
+                {structure.usage.map((entry) => (
+                  <li key={`${entry.tick}-${entry.organismId}-${entry.kind}`} className="chip">
+                    {entry.kind} · tick {entry.tick}
+                  </li>
+                ))}
+              </ul>
+            )}
+
             <p className="muted small">
               Functions are computed by the simulation from measured material properties. No agent
               can declare that a thing works.
             </p>
-            <button
-              type="button"
-              className="link"
-              onClick={() => props.onSelect({ kind: 'agent', id: structure.createdByAgentId })}
-            >
-              Inspect its builder
-            </button>
           </>
         )}
       </aside>
@@ -195,7 +251,7 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
                   <ul className="chips">
                     {organism.inventory.map((item) => (
                       <li key={item.materialId} className="chip">
-                        {item.materialId} × {item.quantity}
+                        {item.materialLabel} × {item.quantity}
                       </li>
                     ))}
                   </ul>

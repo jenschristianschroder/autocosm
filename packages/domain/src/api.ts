@@ -151,9 +151,64 @@ export const StructureDtoSchema = z.object({
   createdByAgentId: idSchema,
   createdByLineageId: idSchema,
   createdAtTick: z.number().int().min(0),
+  /**
+   * Builder identity, joined so a spectator can see who built something without a second request.
+   *
+   * Two short fields per structure rather than the full composition: the snapshot carries up to
+   * `MAX_SNAPSHOT_STRUCTURES` of these, so anything unbounded belongs on the detail route instead.
+   */
+  createdByAgentName: z.string().max(60).optional(),
+  /** Lineage colour, so the 3D view can tint a construction to match whoever raised it. */
+  createdByLineageHue: z.number().int().min(0).max(360).optional(),
 });
 
 export type StructureDto = z.infer<typeof StructureDtoSchema>;
+
+/** One derived capability, with the explanation of how it was earned. */
+export const StructureFunctionDetailSchema = z.object({
+  id: z.enum(STRUCTURE_FUNCTIONS),
+  label: z.string().max(60),
+  /** Magnitude the construction would have at full integrity. */
+  magnitude: z.number().int().min(0).max(1000),
+  /** Magnitude it actually delivers right now, scaled by how damaged it is. */
+  effectiveMagnitude: z.number().int().min(0).max(1000),
+  summary: z.string().max(200),
+  requirement: z.string().max(200),
+});
+
+export const StructureDetailResponseSchema = StructureDtoSchema.extend({
+  createdByOrganismId: idSchema,
+  lastChangedAtTick: z.number().int().min(0),
+  /** Blended physical properties of everything it is made from. */
+  properties: z.record(z.string(), z.number().int()),
+  components: z
+    .array(
+      z.object({
+        materialId: idSchema,
+        label: z.string().max(80),
+        subtitle: z.string().max(200),
+        quantity: z.number().int().min(0),
+      }),
+    )
+    .max(16),
+  /** Replaces the bare `functions` list with the same data plus its glossary explanation. */
+  derivedFunctions: z.array(StructureFunctionDetailSchema).max(16),
+  usage: z
+    .array(
+      z.object({
+        tick: z.number().int().min(0),
+        organismId: idSchema,
+        lineageId: idSchema,
+        kind: z.enum(['shelter', 'inspect', 'harvest', 'repair', 'damage', 'repurpose']),
+      }),
+    )
+    .max(16),
+  /** Integrity lost every tick, and the tick at which it will crumble if left alone. */
+  decayPerTick: z.number().int().min(0),
+  collapsesAtTick: z.number().int().min(0),
+});
+
+export type StructureDetailResponse = z.infer<typeof StructureDetailResponseSchema>;
 
 export const ResourceDtoSchema = z.object({
   id: idSchema,
@@ -309,7 +364,16 @@ export type AgentDetailResponse = z.infer<typeof AgentDetailResponseSchema>;
 export const OrganismDetailResponseSchema = OrganismDtoSchema.extend({
   traits: z.array(TraitDtoSchema),
   phenotype: z.record(z.string(), z.number().int()),
-  inventory: z.array(z.object({ materialId: idSchema, quantity: z.number().int() })).max(16),
+  inventory: z
+    .array(
+      z.object({
+        materialId: idSchema,
+        /** Joined from the world catalogue so a spectator sees matter, not an identifier. */
+        materialLabel: z.string().max(80),
+        quantity: z.number().int(),
+      }),
+    )
+    .max(16),
   parentOrganismId: idSchema.optional(),
   alive: z.boolean(),
   causeOfDeath: z.string().max(32).optional(),
@@ -412,6 +476,36 @@ export const WorldMetaResponseSchema = z.object({
       }),
     )
     .max(200),
+  /**
+   * Every material that exists in this world, keyed by the ids that appear in snapshots.
+   *
+   * Lives on `/world` rather than on the snapshot: it is capped at `maxMaterials`, changes only
+   * when something new is discovered, and this route is polled far less often than the snapshot.
+   * A client that meets an unknown material id refetches `/world` rather than growing every frame.
+   */
+  materials: z
+    .array(
+      z.object({
+        id: idSchema,
+        label: z.string().max(80),
+        subtitle: z.string().max(200),
+        origin: z.enum(['mineral', 'organic', 'fluid', 'composite']),
+        properties: z.record(z.string(), z.number().int()),
+        nutritionPerUnit: z.number().int().min(0),
+        derivedFrom: z
+          .array(
+            z.object({
+              materialId: idSchema,
+              label: z.string().max(80),
+              quantity: z.number().int().min(0),
+            }),
+          )
+          .max(8)
+          .optional(),
+        discoveredAtTick: z.number().int().min(0).optional(),
+      }),
+    )
+    .max(256),
   /** True when the deployment is running without a configured AI provider. */
   heuristicOnly: z.boolean(),
   /** True when a configured AI provider is failing and the world is running degraded. */
@@ -441,3 +535,30 @@ export const CreatorIdentityResponseSchema = z.object({
 });
 
 export type CreatorIdentityResponse = z.infer<typeof CreatorIdentityResponseSchema>;
+
+const GlossaryEntrySchema = z.object({
+  id: z.string().max(48),
+  label: z.string().max(60),
+  summary: z.string().max(240),
+  detail: z.string().max(320).optional(),
+});
+
+/**
+ * The world explained in its own terms.
+ *
+ * Static and derived entirely from domain constants, so it is safe to cache for a long time and
+ * never reveals anything about a particular world's state.
+ */
+export const GlossaryResponseSchema = z.object({
+  version: z.number().int().min(1),
+  structureFunctions: z.array(GlossaryEntrySchema).max(32),
+  structurePatterns: z.array(GlossaryEntrySchema).max(32),
+  materialProperties: z.array(GlossaryEntrySchema).max(32),
+  traits: z.array(GlossaryEntrySchema).max(64),
+  signalChannels: z.array(GlossaryEntrySchema).max(16),
+  deathCauses: z.array(GlossaryEntrySchema).max(16),
+  rejectionReasons: z.array(GlossaryEntrySchema).max(32),
+  decisionReasons: z.array(GlossaryEntrySchema).max(32),
+});
+
+export type GlossaryResponse = z.infer<typeof GlossaryResponseSchema>;

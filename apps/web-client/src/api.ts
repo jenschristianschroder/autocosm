@@ -4,9 +4,11 @@ import type {
   CreateAgentResponse,
   CreatorIdentityResponse,
   EventHistoryResponse,
+  GlossaryResponse,
   LineageDetailResponse,
   OrganismDetailResponse,
   SnapshotResponse,
+  StructureDetailResponse,
   SubmitGoalResponse,
   WorldMetaResponse,
 } from '@autocosm/domain';
@@ -117,6 +119,25 @@ export async function fetchLineage(
 ): Promise<LineageDetailResponse> {
   const suffix = cursor === undefined ? '' : `?cursor=${encodeURIComponent(cursor)}`;
   return request<LineageDetailResponse>(`/lineages/${encodeURIComponent(lineageId)}${suffix}`);
+}
+
+export async function fetchStructure(structureId: string): Promise<StructureDetailResponse> {
+  return request<StructureDetailResponse>(`/structures/${encodeURIComponent(structureId)}`);
+}
+
+/**
+ * The glossary never changes while the page is open, so fetch it once and share the promise.
+ *
+ * A failed fetch is not cached, so a transient error does not permanently strip explanations from
+ * the UI for the rest of the session.
+ */
+let glossaryPromise: Promise<GlossaryResponse> | undefined;
+export async function fetchGlossary(): Promise<GlossaryResponse> {
+  glossaryPromise ??= request<GlossaryResponse>('/glossary').catch((cause: unknown) => {
+    glossaryPromise = undefined;
+    throw cause;
+  });
+  return glossaryPromise;
 }
 
 export async function fetchEvents(

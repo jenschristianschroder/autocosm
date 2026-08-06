@@ -10,9 +10,12 @@ import {
   API_VERSION,
   CreateAgentResponseSchema,
   EventHistoryResponseSchema,
+  GLOSSARY_VERSION,
+  GlossaryResponseSchema,
   HistoryQuerySchema,
   SnapshotQuerySchema,
   SubmitGoalResponseSchema,
+  buildGlossary,
 } from '@autocosm/domain';
 import type { ApiError } from '@autocosm/domain';
 import type { Logger, Metrics } from '@autocosm/observability';
@@ -24,6 +27,7 @@ import {
   composeLineageDetail,
   composeOrganismDetail,
   composeSnapshot,
+  composeStructureDetail,
   composeWorldMeta,
 } from './read-model.js';
 import {
@@ -65,6 +69,12 @@ export const MUTATION_ROUTES: readonly string[] = [
   `POST ${PREFIX}/agents`,
   `POST ${PREFIX}/agents/:agentId/goals`,
 ];
+
+/**
+ * The glossary is static for the lifetime of the process, so build and validate it once at module
+ * load. A schema violation then fails at startup rather than on a spectator's first request.
+ */
+const GLOSSARY_BODY = GlossaryResponseSchema.parse(buildGlossary());
 
 export async function buildServer(deps: ServerDependencies): Promise<FastifyInstance> {
   const { config, world, identity, logger, metrics } = deps;
@@ -354,6 +364,31 @@ function registerRoutes(app: FastifyInstance, deps: RouteDependencies): void {
       void reply.header('cache-control', 'no-store').send(detail);
     },
   );
+
+  app.get<{ Params: { structureId: string } }>(
+    `${PREFIX}/structures/:structureId`,
+    async (req, reply) => {
+      const { state } = await world.load();
+      const detail = composeStructureDetail(state, req.params.structureId);
+      if (!detail) {
+        void reply.code(404).send(errorBody('notFound', 'No such structure.'));
+        return;
+      }
+      void reply.header('cache-control', 'no-store').send(detail);
+    },
+  );
+
+  /**
+   * The glossary is compiled into the binary and changes only when the domain does, so it is safe to
+   * cache hard. `GLOSSARY_VERSION` is carried in the body and the ETag so a client that has cached
+   * an older shape can tell.
+   */
+  app.get(`${PREFIX}/glossary`, async (_req, reply) => {
+    void reply
+      .header('cache-control', 'public, max-age=3600')
+      .header('etag', `"glossary-v${GLOSSARY_VERSION}"`)
+      .send(GLOSSARY_BODY);
+  });
 
   app.get<{ Params: { lineageId: string }; Querystring: { cursor?: string } }>(
     `${PREFIX}/lineages/:lineageId`,

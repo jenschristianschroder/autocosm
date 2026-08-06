@@ -2,20 +2,24 @@ import {
   DEFAULT_CALENDAR,
   REGION_GRID,
   REGION_SPAN_CU,
+  STRUCTURE_FUNCTION_RULES,
   TRAIT_IDS,
   WORLD_SPAN_CU,
   ambientLightPerMille,
   complexityScore,
   dayPhasePerMille,
+  decayPerTick,
   derivePhenotype,
   deriveMaterialId,
   deriveMaterialName,
   deriveVisual,
   effectiveTrait,
+  functionMagnitude,
   regionCentre,
   regionCoordFromId,
   regionIdOf,
   regionNeighbourhood,
+  structureFunctionEntry,
   type AgentDetailResponse,
   type EventHistoryResponse,
   type Genotype,
@@ -24,6 +28,7 @@ import {
   type OrganismDetailResponse,
   type Region,
   type SnapshotResponse,
+  type StructureDetailResponse,
   type WorldMetaResponse,
 } from '@autocosm/domain';
 import type { WorldState } from '@autocosm/simulation';
@@ -41,6 +46,8 @@ import type { WorldState } from '@autocosm/simulation';
 export const MAX_SNAPSHOT_ORGANISMS = 600;
 export const MAX_SNAPSHOT_STRUCTURES = 300;
 export const MAX_SNAPSHOT_RESOURCES = 400;
+/** Ceiling on the world material catalogue, comfortably above the simulation's own `maxMaterials`. */
+const MAX_CATALOGUE_MATERIALS = 256;
 const MAX_LINEAGE_NODES = 400;
 const MAX_AGENT_MEMORIES = 16;
 
@@ -90,6 +97,7 @@ export function composeSnapshot(state: WorldState, options: SnapshotOptions): Sn
       structuresTruncated = true;
       break;
     }
+    const builder = builderChip(state, structure.createdByAgentId, structure.createdByLineageId);
     structures.push({
       id: structure.id,
       regionId: structure.regionId,
@@ -104,6 +112,7 @@ export function composeSnapshot(state: WorldState, options: SnapshotOptions): Sn
       createdByAgentId: structure.createdByAgentId,
       createdByLineageId: structure.createdByLineageId,
       createdAtTick: structure.createdAtTick,
+      ...builder,
     });
   }
 
@@ -240,9 +249,42 @@ export function composeWorldMeta(
     stats: { ...state.world.stats },
     regions: [...state.regions.values()].map(regionDto),
     agents,
+    materials: materialCatalogue(state),
     heuristicOnly: flags.heuristicOnly,
     aiDegraded: flags.aiDegraded,
   };
+}
+
+/**
+ * Every material in the world, in a stable order.
+ *
+ * Sorted by id rather than discovery order so the response is byte-identical for a given world
+ * state — that keeps the ETag on this route meaningful and the browser's cache useful.
+ */
+function materialCatalogue(state: WorldState): WorldMetaResponse['materials'] {
+  return [...state.materials.values()]
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .slice(0, MAX_CATALOGUE_MATERIALS)
+    .map((material) => ({
+      id: material.id,
+      label: material.label,
+      subtitle: deriveMaterialName(material).subtitle,
+      origin: material.origin,
+      properties: { ...material.properties },
+      nutritionPerUnit: material.nutritionPerUnit,
+      ...(material.derivedFrom === undefined
+        ? {}
+        : {
+            derivedFrom: material.derivedFrom.slice(0, 8).map((component) => ({
+              materialId: component.materialId,
+              label: state.materials.get(component.materialId)?.label ?? component.materialId,
+              quantity: component.quantity,
+            })),
+          }),
+      ...(material.discoveredAtTick === undefined
+        ? {}
+        : { discoveredAtTick: material.discoveredAtTick }),
+    }));
 }
 
 /** Fallback genome for an agent whose lineage record is missing; keeps the response total. */
@@ -275,6 +317,27 @@ function materialChip(
   const material = state.materials.get(id);
   if (!material) return { id, label: id, subtitle: '' };
   return { id, label: material.label, subtitle: deriveMaterialName(material).subtitle };
+}
+
+/**
+ * Resolve a builder to a name and a colour.
+ *
+ * Returned as a spreadable partial so a structure whose agent record has been reaped simply omits
+ * the fields rather than carrying a placeholder that reads like a real name.
+ */
+function builderChip(
+  state: WorldState,
+  agentId: string,
+  lineageId: string,
+): { createdByAgentName?: string; createdByLineageHue?: number } {
+  const agent = state.agents.get(agentId as never);
+  const lineage = state.lineages.get(lineageId as never);
+  return {
+    ...(agent === undefined ? {} : { createdByAgentName: agent.name }),
+    ...(lineage === undefined
+      ? {}
+      : { createdByLineageHue: deriveVisual(lineage.meanGenotype).hue }),
+  };
 }
 
 export function composeAgentDetail(
@@ -368,9 +431,11 @@ export function composeOrganismDetail(
     visual: deriveVisual(organism.genotype),
     traits: traitDtos(organism.genotype),
     phenotype: numericPhenotype(phenotype),
-    inventory: organism.inventory
-      .slice(0, 16)
-      .map((e) => ({ materialId: e.materialId, quantity: e.quantity })),
+    inventory: organism.inventory.slice(0, 16).map((e) => ({
+      materialId: e.materialId,
+      materialLabel: state.materials.get(e.materialId)?.label ?? e.materialId,
+      quantity: e.quantity,
+    })),
     ...(organism.parentOrganismId === undefined
       ? {}
       : { parentOrganismId: organism.parentOrganismId }),
@@ -379,6 +444,74 @@ export function composeOrganismDetail(
     ...(organism.attachedStructureId === undefined
       ? {}
       : { attachedStructureId: organism.attachedStructureId }),
+  };
+}
+
+/**
+ * Everything a spectator needs to understand a single construction.
+ *
+ * The snapshot deliberately carries only the builder's name and colour; composition, usage history
+ * and function explanations live here because they are unbounded per structure and would multiply
+ * across the hundreds of structures a snapshot can hold.
+ */
+export function composeStructureDetail(
+  state: WorldState,
+  structureId: string,
+): StructureDetailResponse | undefined {
+  const structure = state.structures.get(structureId as never);
+  if (!structure) return undefined;
+
+  const perTick = decayPerTick(structure.properties);
+  const rules = new Map(STRUCTURE_FUNCTION_RULES.map((rule) => [rule.id, rule]));
+
+  return {
+    id: structure.id,
+    regionId: structure.regionId,
+    x: structure.position.x,
+    z: structure.position.z,
+    elevation: state.terrain.elevationAtPosition(structure.position),
+    pattern: structure.pattern,
+    label: structure.label,
+    integrity: structure.integrity,
+    volume: structure.volume,
+    functions: structure.functions.map((f) => ({ id: f.id, magnitude: f.magnitude })),
+    createdByAgentId: structure.createdByAgentId,
+    createdByLineageId: structure.createdByLineageId,
+    createdAtTick: structure.createdAtTick,
+    ...builderChip(state, structure.createdByAgentId, structure.createdByLineageId),
+    createdByOrganismId: structure.createdByOrganismId,
+    lastChangedAtTick: structure.lastChangedAtTick,
+    properties: { ...structure.properties },
+    components: structure.components.slice(0, 16).map((component) => {
+      const chip = materialChip(state, component.materialId);
+      return {
+        materialId: component.materialId,
+        label: chip.label,
+        subtitle: chip.subtitle,
+        quantity: component.quantity,
+      };
+    }),
+    derivedFunctions: structure.functions.slice(0, 16).map((fn) => {
+      const rule = rules.get(fn.id);
+      return {
+        id: fn.id,
+        label: structureFunctionEntry(fn.id)?.label ?? fn.id,
+        magnitude: fn.magnitude,
+        // What it delivers today. A half-ruined shelter shelters half as well, and saying so is
+        // the clearest way to show that integrity is not cosmetic.
+        effectiveMagnitude: functionMagnitude(structure, fn.id),
+        summary: rule?.summary ?? '',
+        requirement: rule?.requirement ?? '',
+      };
+    }),
+    usage: structure.usage.slice(-16).map((entry) => ({
+      tick: entry.tick,
+      organismId: entry.organismId,
+      lineageId: entry.lineageId,
+      kind: entry.kind,
+    })),
+    decayPerTick: perTick,
+    collapsesAtTick: state.world.tick + Math.ceil(structure.integrity / Math.max(1, perTick)),
   };
 }
 

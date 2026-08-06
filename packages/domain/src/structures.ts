@@ -87,6 +87,15 @@ export const MIN_STRUCTURE_VOLUME: Mu = 40;
 interface FunctionRule {
   readonly id: StructureFunctionId;
   readonly patterns: readonly StructurePattern[];
+  /** What the function does for an organism, in one sentence. Surfaced in the glossary. */
+  readonly summary: string;
+  /**
+   * The physical requirement, stated in the same units the spectator sees.
+   *
+   * Kept immediately beside `evaluate` so the two cannot drift apart unnoticed: any change to
+   * the thresholds below is a change to the line above it in the same object literal.
+   */
+  readonly requirement: string;
   /** Returns raw magnitude before clamping, or `0` when the requirements are unmet. */
   readonly evaluate: (p: MaterialProperties, volume: Mu) => number;
 }
@@ -101,45 +110,62 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'shelter',
     patterns: ['shell', 'lattice'],
+    summary: 'Shields organisms inside it from environmental pressure and reduces upkeep.',
+    requirement: 'Hardness of at least 420 and a volume of at least 120 mu.',
     evaluate: (p, v) =>
       p.hardness >= 420 && v >= 120 ? Math.trunc((p.hardness * 2) / 3) + Math.min(200, v) : 0,
   },
   {
     id: 'barrier',
     patterns: ['lattice', 'shell', 'anchor'],
+    summary: 'Blocks movement across it, holding predators or rivals away from what it encloses.',
+    requirement: 'Hardness of at least 600 and a volume of at least 200 mu.',
     evaluate: (p, v) =>
       p.hardness >= 600 && v >= 200 ? p.hardness - 200 + Math.min(150, v / 4) : 0,
   },
   {
     id: 'snare',
     patterns: ['snare', 'mesh'],
+    summary: 'Catches and holds passing organisms, making them easier to reach.',
+    requirement: 'Adhesion of at least 600. Flexibility adds to the hold.',
     evaluate: (p) => (p.adhesion >= 600 ? p.adhesion - 300 + Math.trunc(p.flexibility / 4) : 0),
   },
   {
     id: 'conduit',
     patterns: ['conduit', 'lattice'],
+    summary: 'Carries energy along its length, letting organisms draw from a distant source.',
+    requirement: 'Conductivity of at least 500.',
     evaluate: (p) => (p.conductivity >= 500 ? p.conductivity - 250 : 0),
   },
   {
     id: 'beacon',
     patterns: ['beacon', 'lattice', 'shell'],
+    summary: 'Emits a light signal that organisms can perceive from far outside sensing range.',
+    requirement: 'Photosensitivity of at least 500.',
     evaluate: (p) => (p.photosensitivity >= 500 ? p.photosensitivity - 200 : 0),
   },
   {
     id: 'reservoir',
     patterns: ['vessel', 'shell'],
+    summary: 'Stores material without loss, banking a surplus against a later shortage.',
+    requirement: 'Porosity of at most 250 and a volume of at least 100 mu.',
     evaluate: (p, v) =>
       p.porosity <= 250 && v >= 100 ? 600 - p.porosity + Math.min(200, v / 3) : 0,
   },
   {
     id: 'filter',
     patterns: ['mesh', 'lattice'],
+    summary: 'Separates usable matter from waste, raising the yield of what passes through it.',
+    requirement: 'Porosity between 350 and 750. Strongest at 550 — too open or too dense fails.',
     evaluate: (p) =>
       p.porosity >= 350 && p.porosity <= 750 ? 400 + (750 - Math.abs(550 - p.porosity)) / 2 : 0,
   },
   {
     id: 'nursery',
     patterns: ['shell', 'vessel'],
+    summary: 'Protects offspring through their vulnerable first ticks, raising survival.',
+    requirement:
+      'Hardness of at least 300, flexibility of at least 300, volume of at least 150 mu.',
     evaluate: (p, v) =>
       p.hardness >= 300 && p.flexibility >= 300 && v >= 150
         ? Math.trunc((p.hardness + p.flexibility) / 3)
@@ -148,15 +174,38 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'toxinWard',
     patterns: [...STRUCTURE_PATTERNS],
+    summary: 'Poisons whatever approaches it, deterring organisms without toxin resistance.',
+    requirement: 'Toxicity of at least 500. Available to every pattern.',
     evaluate: (p) => (p.toxicity >= 500 ? p.toxicity - 250 : 0),
   },
   {
     id: 'anchor',
     patterns: ['anchor', 'lattice'],
+    summary: 'Holds fast to the terrain, giving organisms a fixed point to attach to.',
+    requirement: 'Adhesion of at least 400 and density of at least 500.',
     evaluate: (p) =>
       p.adhesion >= 400 && p.density >= 500 ? Math.trunc((p.adhesion + p.density) / 4) : 0,
   },
 ];
+
+/**
+ * Public projection of the derivation rules, for the glossary.
+ *
+ * The magnitude formulas stay private — a spectator needs to know *what is required*, not how the
+ * number is scaled. Exporting the projection rather than `FUNCTION_RULES` itself keeps `evaluate`
+ * out of the public surface so it cannot be called with fabricated properties.
+ */
+export const STRUCTURE_FUNCTION_RULES: readonly {
+  readonly id: StructureFunctionId;
+  readonly patterns: readonly StructurePattern[];
+  readonly summary: string;
+  readonly requirement: string;
+}[] = FUNCTION_RULES.map((rule) => ({
+  id: rule.id,
+  patterns: rule.patterns,
+  summary: rule.summary,
+  requirement: rule.requirement,
+}));
 
 /**
  * Derive what a construction can do.

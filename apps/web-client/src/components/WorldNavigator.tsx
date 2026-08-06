@@ -1,4 +1,5 @@
 import type { JSX } from 'react';
+import { lineageColour } from '../lineage-colour';
 import type { Selection, WorldMetaResponse } from '../types';
 
 /**
@@ -67,7 +68,7 @@ export function WorldNavigator(props: WorldNavigatorProps): JSX.Element {
               }
               onClick={() => props.onSelect({ kind: 'agent', id: agent.id })}
             >
-              <span className="roster__swatch" style={{ background: hueColour(agent.hue) }} />
+              <span className="roster__swatch" style={{ background: lineageColour(agent.hue) }} />
               <span className="roster__name">{agent.name}</span>
               <span className="roster__meta">
                 {agent.livingOrganisms} · g{agent.generations}
@@ -88,7 +89,10 @@ export function WorldNavigator(props: WorldNavigatorProps): JSX.Element {
                   className="roster__item roster__item--extinct"
                   onClick={() => props.onSelect({ kind: 'agent', id: agent.id })}
                 >
-                  <span className="roster__swatch" style={{ background: hueColour(agent.hue) }} />
+                  <span
+                    className="roster__swatch"
+                    style={{ background: lineageColour(agent.hue) }}
+                  />
                   <span className="roster__name">{agent.name}</span>
                   <span className="roster__meta">g{agent.generations}</span>
                 </button>
@@ -119,8 +123,4 @@ export function WorldNavigator(props: WorldNavigatorProps): JSX.Element {
       </p>
     </nav>
   );
-}
-
-function hueColour(hue: number): string {
-  return `hsl(${Math.round((hue / 1000) * 360)} 62% 55%)`;
 }

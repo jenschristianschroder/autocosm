@@ -19,5 +19,6 @@ export * from './entities.js';
 export * from './actions.js';
 export * from './events.js';
 export * from './observation.js';
+export * from './glossary.js';
 export * from './api.js';
 export * from './records.js';

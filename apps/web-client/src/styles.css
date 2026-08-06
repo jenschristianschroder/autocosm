@@ -236,6 +236,12 @@ p {
   background: var(--panel-solid);
 }
 
+.panel--glossary {
+  max-height: 72vh;
+  overflow: auto;
+  background: var(--panel-solid);
+}
+
 /* --------------------------------------------------------------- canvas --- */
 
 .viewport,
@@ -540,6 +546,19 @@ textarea {
 .facts dd {
   margin: 0;
   font-variant-numeric: tabular-nums;
+}
+
+/** A term with an explanation under it: glossary entries, structure functions. */
+.definitions {
+  list-style: none;
+  margin: 0.5rem 0;
+  padding: 0;
+  display: grid;
+  gap: 0.6rem;
+}
+
+.definitions p {
+  margin: 0.15rem 0 0;
 }
 
 .meter {

@@ -7,6 +7,7 @@ import { InspectorPanel } from './components/InspectorPanel';
 import { LineageTree } from './components/LineageTree';
 import { EventTimeline } from './components/EventTimeline';
 import { CreateAgentDialog } from './components/CreateAgentDialog';
+import { GlossaryPanel } from './components/GlossaryPanel';
 import { GoalDialog } from './components/GoalDialog';
 import { StatusBar } from './components/StatusBar';
 import { WorldNavigator } from './components/WorldNavigator';
@@ -32,6 +33,7 @@ export function App(): JSX.Element {
   const [backend, setBackend] = useState<string>();
   const [fps, setFps] = useState<number>();
   const [panelsOpen, setPanelsOpen] = useState(true);
+  const [glossaryOpen, setGlossaryOpen] = useState(false);
 
   const select = useCallback((next: Selection) => {
     setSelection(next);
@@ -90,6 +92,14 @@ export function App(): JSX.Element {
           </span>
         </h1>
         <div className="topbar__actions">
+          <button
+            type="button"
+            className="button button--ghost"
+            onClick={() => setGlossaryOpen((value) => !value)}
+            aria-pressed={glossaryOpen}
+          >
+            Field guide
+          </button>
           <button
             type="button"
             className="button button--ghost"
@@ -182,6 +192,12 @@ export function App(): JSX.Element {
           <EventTimeline tick={tick} regionId={feed.regionId} onSelect={select} />
         </div>
       </main>
+
+      {glossaryOpen && (
+        <div className="floating">
+          <GlossaryPanel open={glossaryOpen} onClose={() => setGlossaryOpen(false)} />
+        </div>
+      )}
 
       {lineageId !== undefined && (
         <div className="floating">

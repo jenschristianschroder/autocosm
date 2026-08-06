@@ -4,9 +4,11 @@ import type {
   CreateAgentResponse,
   CreatorIdentityResponse,
   EventHistoryResponse,
+  GlossaryResponse,
   LineageDetailResponse,
   OrganismDetailResponse,
   SnapshotResponse,
+  StructureDetailResponse,
   SubmitGoalResponse,
   WorldMetaResponse,
 } from '@autocosm/domain';
@@ -23,9 +25,11 @@ export type {
   CreateAgentResponse,
   CreatorIdentityResponse,
   EventHistoryResponse,
+  GlossaryResponse,
   LineageDetailResponse,
   OrganismDetailResponse,
   SnapshotResponse,
+  StructureDetailResponse,
   SubmitGoalResponse,
   WorldMetaResponse,
 };
@@ -37,8 +41,10 @@ export type ResourceDto = SnapshotResponse['resources'][number];
 export type VisualDto = OrganismDto['visual'];
 export type EventDto = EventHistoryResponse['events'][number];
 export type AgentSummary = WorldMetaResponse['agents'][number];
+export type MaterialDto = WorldMetaResponse['materials'][number];
 export type LineageNodeDto = LineageDetailResponse['nodes'][number];
 export type TraitDto = AgentDetailResponse['meanTraits'][number];
+export type GlossaryEntryDto = GlossaryResponse['traits'][number];
 
 /** What the observer currently has selected, if anything. */
 export type Selection =

@@ -8,6 +8,7 @@ import { advanceTick, generateWorld, toRecords } from '@autocosm/simulation';
 import {
   CreateAgentResponseSchema,
   EventHistoryResponseSchema,
+  GlossaryResponseSchema,
   SnapshotResponseSchema,
   SubmitGoalResponseSchema,
   WorldMetaResponseSchema,
@@ -238,7 +239,25 @@ describe('read routes', () => {
 
     const parsedMeta = WorldMetaResponseSchema.parse(meta.json());
     expect(parsedMeta.agents.length).toBeGreaterThanOrEqual(8);
+    // The material catalogue rides on /world rather than the snapshot, so a spectator can name
+    // anything the world references without a request per material.
+    expect(parsedMeta.materials.length).toBeGreaterThan(0);
+    expect(parsedMeta.materials.every((m) => m.label.length > 0)).toBe(true);
     expect(EventHistoryResponseSchema.parse(events.json()).events.length).toBeLessThanOrEqual(25);
+  });
+
+  it('serves a cacheable glossary that explains the vocabulary the world uses', async () => {
+    const { app } = await harness();
+    const res = await app.inject({ method: 'GET', url: '/api/v1/glossary' });
+    await app.close();
+
+    expect(res.statusCode).toBe(200);
+    // Static for the life of the deployment; a spectator should not refetch it every poll.
+    expect(res.headers['cache-control']).toContain('max-age=');
+    const glossary = GlossaryResponseSchema.parse(res.json());
+    expect(glossary.structureFunctions.length).toBe(10);
+    expect(glossary.traits.length).toBeGreaterThan(0);
+    expect(glossary.rejectionReasons.length).toBeGreaterThan(0);
   });
 
   it('rejects an out-of-range snapshot radius rather than clamping silently', async () => {
@@ -249,12 +268,13 @@ describe('read routes', () => {
     expect(res.json()).toMatchObject({ error: { code: 'invalidRequest' } });
   });
 
-  it('returns 404 for unknown agents, organisms and lineages', async () => {
+  it('returns 404 for unknown agents, organisms, lineages and structures', async () => {
     const { app } = await harness();
     for (const url of [
       '/api/v1/agents/ag-nope',
       '/api/v1/organisms/o-nope',
       '/api/v1/lineages/l-nope',
+      '/api/v1/structures/st-nope',
     ]) {
       const res = await app.inject({ method: 'GET', url });
       expect(res.statusCode, url).toBe(404);

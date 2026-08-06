@@ -217,7 +217,15 @@ export interface LineageNode {
   readonly complexity: number;
 }
 
-export type DeathCause = 'starvation' | 'age' | 'predation' | 'environment' | 'toxicity';
+/**
+ * Every way an organism can die.
+ *
+ * Declared as a const array rather than a bare union so the glossary, the API schema and any
+ * completeness test all read from one source: adding a cause here surfaces it everywhere.
+ */
+export const DEATH_CAUSES = ['starvation', 'age', 'predation', 'environment', 'toxicity'] as const;
+
+export type DeathCause = (typeof DEATH_CAUSES)[number];
 
 /** Lifetime, non-heritable adaptation acquired by an individual organism. */
 export interface LifetimeState {
