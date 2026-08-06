@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { WorldEvent } from '@autocosm/domain';
+import type { AgentActionType, RejectionReason, WorldEvent } from '@autocosm/domain';
 import { advanceTick } from './tick.js';
 import { generateWorld } from './worldgen.js';
 import type { WorldState } from './state.js';
@@ -44,12 +44,22 @@ function run(seed: number, worldId: string): Run {
   return { state, events };
 }
 
+/**
+ * `<action>/<reason>` as the simulation itself spells them.
+ *
+ * Typed against the domain unions rather than plain `string`, so a renamed action or reason — or a
+ * mistyped lookup below — is a compile error. The first version of this file harvested
+ * `payload.action`; the field is `payload.actionType`, so every key was `undefined/<reason>` and the
+ * three "never rejects" assertions passed against a map that could not contain them.
+ */
+type RejectionKey = `${AgentActionType}/${RejectionReason}`;
+
 /** Every `<action>/<reason>` pair the world rejected, counted. */
-function rejections(events: readonly WorldEvent[]): Map<string, number> {
-  const counts = new Map<string, number>();
+function rejections(events: readonly WorldEvent[]): Map<RejectionKey, number> {
+  const counts = new Map<RejectionKey, number>();
   for (const event of events) {
     if (event.kind !== 'actionRejected') continue;
-    const key = `${String(event.payload.action)}/${String(event.payload.reason)}`;
+    const key: RejectionKey = `${event.payload.actionType}/${event.payload.reason}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
   return counts;
@@ -57,6 +67,16 @@ function rejections(events: readonly WorldEvent[]): Map<string, number> {
 
 describe('observability of the self', () => {
   const worlds = [run(4_242_424, 'w-observe'), run(91_017, 'w-observe')];
+
+  it('harvests rejections at all', () => {
+    // The control for the three assertions below. "Zero of X" is only evidence when the harvester
+    // demonstrably sees rejections; a silently empty map satisfies every one of them.
+    for (const world of worlds) {
+      const counted = [...rejections(world.events).values()].reduce((sum, n) => sum + n, 0);
+      expect(counted).toBeGreaterThan(0);
+      expect(counted).toBe(world.events.filter((e) => e.kind === 'actionRejected').length);
+    }
+  });
 
   it('never proposes a birth during its own refractory period', () => {
     for (const world of worlds) {

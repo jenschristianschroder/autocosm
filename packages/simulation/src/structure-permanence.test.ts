@@ -33,7 +33,9 @@ function properties(partial: Partial<MaterialProperties>): MaterialProperties {
     porosity: 500,
     conductivity: 500,
     adhesion: 500,
-    reactivity: 500,
+    // `reactivity` is not a material property; the real one is `photosensitivity`. The fixture
+    // previously set the former, leaving the latter `undefined` in a supposedly complete vector.
+    photosensitivity: 500,
     toxicity: 0,
     ...partial,
   };

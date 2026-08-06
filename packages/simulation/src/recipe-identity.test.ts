@@ -1,10 +1,13 @@
 import { describe, expect, it } from 'vitest';
 import {
+  asMaterialId,
   derivePhenotype,
   deriveRecipeKey,
   scaleByPerMille,
+  type AgentId,
   type KnownRecipe,
   type Organism,
+  type OrganismId,
   type Signal,
   type WorldEvent,
 } from '@autocosm/domain';
@@ -64,7 +67,7 @@ const TEACH_INTENSITY = 600;
  */
 function findTeacher(state: WorldState): {
   state: WorldState;
-  organismId: string;
+  organismId: OrganismId;
   recipeKey: string;
 } {
   const signalCost = Math.max(1, scaleByPerMille(6, TEACH_INTENSITY));
@@ -88,7 +91,11 @@ function findTeacher(state: WorldState): {
     const organisms = new Map(state.organisms);
     organisms.set(id, { ...organism, energy: Math.max(organism.energy, signalCost * 4) });
 
-    return { state: { ...state, agents, organisms }, organismId: id, recipeKey: recipe.key };
+    return {
+      state: { ...state, agents, organisms },
+      organismId: organism.id,
+      recipeKey: recipe.key,
+    };
   }
   throw new Error('no living organism has evolved a signal');
 }
@@ -104,7 +111,8 @@ function findTeacher(state: WorldState): {
 function stageTeaching(state: WorldState): {
   state: WorldState;
   recipe: KnownRecipe;
-  listenerId: string;
+  listenerId: OrganismId;
+  listenerAgentId: AgentId;
 } {
   const { state: staged, organismId } = findTeacher(state);
   const teacher = staged.organisms.get(organismId);
@@ -153,6 +161,7 @@ function stageTeaching(state: WorldState): {
     state: { ...staged, organisms, signals: [signal] },
     recipe,
     listenerId: listener.id,
+    listenerAgentId: listener.agentId,
   };
 }
 
@@ -167,9 +176,7 @@ describe('recipe identity', () => {
 
   it('transmits a recipe to a listener in earshot, matched by key not label', () => {
     const staged = stageTeaching(state);
-    const before = staged.state.agents.get(
-      staged.state.organisms.get(staged.listenerId)?.agentId ?? '',
-    );
+    const before = staged.state.agents.get(staged.listenerAgentId);
     expect(before?.knowledge.recipes.some((r) => r.key === staged.recipe.key)).toBe(false);
 
     const result = advanceTick(staged.state);
@@ -178,9 +185,8 @@ describe('recipe identity', () => {
     expect(shared.length).toBe(1);
     expect(shared[0]?.payload).toMatchObject({ recipeKey: staged.recipe.key });
 
-    const listener = result.state.organisms.get(staged.listenerId);
     const learned = result.state.agents
-      .get(listener?.agentId ?? '')
+      .get(staged.listenerAgentId)
       ?.knowledge.recipes.find((r) => r.key === staged.recipe.key);
     expect(learned).toBeDefined();
     expect(learned?.learnedFromLineageId).toBe(staged.state.signals[0]?.lineageId);
@@ -191,7 +197,7 @@ describe('recipe identity', () => {
     // Dedupe must key off content. Were it label-based, a later renaming phase would let the same
     // recipe be learned twice and inflate every agent's bounded recipe list.
     const staged = stageTeaching(state);
-    const listenerAgentId = staged.state.organisms.get(staged.listenerId)?.agentId ?? '';
+    const listenerAgentId = staged.listenerAgentId;
     const agents = new Map(staged.state.agents);
     const agent = agents.get(listenerAgentId);
     if (!agent) throw new Error('listener has no agent');
@@ -217,7 +223,7 @@ describe('recipe identity', () => {
     for (const agent of state.agents.values()) {
       for (const recipe of agent.knowledge.recipes) {
         expect(recipe.key).toBe(deriveRecipeKey(recipe.components));
-        const produced = state.materials.get(recipe.key);
+        const produced = state.materials.get(asMaterialId(recipe.key));
         expect(produced).toBeDefined();
         expect(produced?.derivedFrom).toEqual(recipe.components);
       }

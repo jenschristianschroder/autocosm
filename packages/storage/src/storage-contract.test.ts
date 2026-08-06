@@ -580,6 +580,7 @@ describe.each(adapters)('$name storage contract', ({ create }) => {
       dayKey: '2024-01-01',
       agentsCreated: 1,
       goalsSubmitted: 0,
+      decisionsRequested: 0,
     });
     const found = await repo.control.getQuota(WORLD_ID, 'creator-1', '2024-01-01');
     expect(found?.value.agentsCreated).toBe(1);
@@ -592,6 +593,7 @@ describe.each(adapters)('$name storage contract', ({ create }) => {
         dayKey: '2024-01-01',
         agentsCreated: 2,
         goalsSubmitted: 0,
+        decisionsRequested: 0,
       },
       etag,
     );
@@ -608,6 +610,7 @@ describe.each(adapters)('$name storage contract', ({ create }) => {
           dayKey: '2024-01-01',
           agentsCreated: 2,
           goalsSubmitted: 1,
+          decisionsRequested: 0,
         },
         etag,
       ),

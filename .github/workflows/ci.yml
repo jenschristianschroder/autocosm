@@ -52,6 +52,12 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      # Test files sit outside every build tsconfig, so for most of this repo's life they were the
+      # only unchecked code in a strict-TypeScript project. That let assertions read fields that do
+      # not exist and pass vacuously. This step closes that gap.
+      - name: Type-check tests
+        run: npm run typecheck:tests
+
       # Installed before the test run because the `infra` Vitest project compiles the Bicep it
       # asserts on. No Azure subscription or login is involved — `az bicep build` is offline.
       - name: Install Bicep

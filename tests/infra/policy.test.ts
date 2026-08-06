@@ -326,7 +326,9 @@ describe('workload identities and least privilege', () => {
   it('scopes every table role to a single table, not the whole account', () => {
     const tableRoles = assignments.filter((a) =>
       rolesOf(identityTemplate, a).some((role) =>
-        [ROLES.storageTableDataReader, ROLES.storageTableDataContributor].includes(role),
+        (
+          [ROLES.storageTableDataReader, ROLES.storageTableDataContributor] as readonly string[]
+        ).includes(role),
       ),
     );
     expect(tableRoles.length).toBeGreaterThan(0);

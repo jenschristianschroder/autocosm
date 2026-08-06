@@ -19,15 +19,16 @@ import {
 
 function event(id: string, tick: number): StoredWorldEvent {
   return {
-    rv: 1,
     id,
+    version: 1,
     worldId: 'world-alpha',
     tick,
+    ordinal: 0,
     regionId: 'r0x0',
     kind: 'organismFed',
     summary: `event ${id}`,
-    emittedAtEpochMs: 0,
-  } as StoredWorldEvent;
+    payload: {},
+  };
 }
 
 /** Ascending by (tick, id), exactly as a table scan would return it. */

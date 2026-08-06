@@ -69,8 +69,9 @@ describe('seeded biosphere', () => {
   });
 
   it('produces births, deaths, feeding and migration', () => {
-    for (const required of ['organismBorn', 'organismDied', 'organismFed', 'organismMigrated']) {
-      expect(kinds.has(required), `expected a ${required} event`).toBe(true);
+    const required = ['organismBorn', 'organismDied', 'organismFed', 'organismMigrated'] as const;
+    for (const kind of required) {
+      expect(kinds.has(kind), `expected a ${kind} event`).toBe(true);
     }
     expect(countOf('organismBorn')).toBeGreaterThan(50);
     expect(countOf('organismDied')).toBeGreaterThan(50);
@@ -224,13 +225,12 @@ describe('action rejection', () => {
     if (!organism) return;
     ctx.draft.organisms.set(actorId, {
       ...organism,
-      genotype: { ...organism.genotype, manipulation: 0, appendages: 0 },
+      genotype: { ...organism.genotype, manipulation: 0 },
     });
     const result = resolveAction(ctx, actorId, {
       type: 'build',
       pattern: 'shell',
       components: [{ materialId: 'stone', quantity: 200 }],
-      label: 'impossible',
     });
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe('capabilityNotEvolved');
@@ -249,14 +249,13 @@ describe('action rejection', () => {
     // Give it the body for the job but an empty inventory.
     ctx.draft.organisms.set(actorId, {
       ...organism,
-      genotype: { ...organism.genotype, manipulation: 1000, appendages: 900, memoryCapacity: 900 },
+      genotype: { ...organism.genotype, manipulation: 1000, memoryCapacity: 900 },
       inventory: [],
     });
     const result = resolveAction(ctx, actorId, {
       type: 'build',
       pattern: 'shell',
       components: [{ materialId: 'stone', quantity: 200 }],
-      label: 'castle in the air',
     });
     expect(result.accepted).toBe(false);
     expect(result.reason).toBe('insufficientMaterial');

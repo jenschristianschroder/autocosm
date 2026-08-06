@@ -20,13 +20,21 @@ function run(state: WorldState, ticks: number): WorldState {
   return next;
 }
 
-/** A deep fingerprint covering every field the tick engine reads back. */
+/**
+ * A deep fingerprint covering every field the tick engine reads back.
+ *
+ * Four of these accessors previously named fields that do not exist — `pressure.untilTick`,
+ * `calendar.dayLengthTicks`, `calendar.light`, `calendar.heat` — plus `region.temperature` and
+ * `region.light`. Each stringified to `undefined`, so the round-trip could have dropped the calendar
+ * and the pressure window entirely and this test would still have passed. Test files were excluded
+ * from `tsc`, so nothing caught it; `tsconfig.tests.json` now checks them.
+ */
 function fingerprint(state: WorldState): string {
   const parts: string[] = [
     `tick:${state.world.tick}`,
     `seed:${state.world.seed}`,
-    `pressure:${state.world.pressure.kind}@${state.world.pressure.untilTick}`,
-    `calendar:${state.world.calendar.dayLengthTicks}/${state.world.calendar.light}/${state.world.calendar.heat}`,
+    `pressure:${state.world.pressure.kind}@${state.world.pressure.startedAtTick}-${state.world.pressure.endsAtTick}:${state.world.pressure.severity}`,
+    `calendar:${state.world.calendar.ticksPerDay}/${state.world.calendar.ticksPerPressureCycle}/${state.world.calendar.simulatedMinutesPerTick}`,
     `stats:${JSON.stringify(state.world.stats)}`,
     `signals:${state.signals
       .map((s) => `${s.organismId}:${s.channel}:${s.intensity}:${s.recipe?.key ?? '-'}`)
@@ -79,7 +87,9 @@ function fingerprint(state: WorldState): string {
   for (const id of sortedIds(state.regions)) {
     const r = state.regions.get(id);
     if (!r) continue;
-    parts.push([r.id, r.biomass, r.mineralRichness, r.temperature, r.light].join('|'));
+    parts.push(
+      [r.id, r.biome, r.biomass, r.mineralRichness, r.baseTemperature, r.lightModifier].join('|'),
+    );
   }
   for (const id of sortedIds(state.agents)) {
     const a = state.agents.get(id);

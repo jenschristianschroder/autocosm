@@ -81,7 +81,7 @@ function fingerprint(state: WorldState): string {
   for (const id of sortedIds(state.regions)) {
     const r = state.regions.get(id);
     if (!r) continue;
-    parts.push([r.id, r.biomass, r.mineralRichness, r.temperature].join('|'));
+    parts.push([r.id, r.biomass, r.mineralRichness, r.baseTemperature].join('|'));
   }
   return parts.join('\n');
 }
@@ -173,31 +173,48 @@ function totalEnergy(state: WorldState): number {
 }
 
 describe('mutation bounds', () => {
+  /**
+   * Mutate every trait every generation.
+   *
+   * The third argument is a per-mille chance, not a config. It was previously
+   * `DEFAULT_SIMULATION_CONFIG`, and `Prng.chance` truncates its argument — `Math.trunc(object)` is
+   * `NaN`, and every comparison against `NaN` is false, so `chance` returned false for all 200
+   * generations. The bounds guard therefore only ever checked that unmutated traits equal
+   * themselves. Certainty here is deliberate: a bounds test wants maximum drift, not average drift.
+   */
+  const ALWAYS = 1000;
+
   it('keeps every trait inside [0, 1000] and within one mutation step', () => {
     const base = generateWorld({ seed: SEED, worldId: 'w-test' });
     const parent = firstOrganism(base);
 
     let genotype = parent.genotype;
+    let mutations = 0;
     for (let generation = 0; generation < 200; generation += 1) {
       const rng = new Prng(generation * 7919 + 13);
-      const next = mutateGenotype(genotype, rng, DEFAULT_SIMULATION_CONFIG);
+      const next = mutateGenotype(genotype, rng, ALWAYS);
       for (const trait of TRAIT_IDS) {
         const value = next[trait];
         expect(value).toBeGreaterThanOrEqual(0);
         expect(value).toBeLessThanOrEqual(1000);
         expect(Number.isInteger(value)).toBe(true);
         expect(Math.abs(value - genotype[trait])).toBeLessThanOrEqual(MAX_MUTATION_STEP);
+        if (value !== genotype[trait]) mutations += 1;
       }
       genotype = next;
     }
+    // The control. Bounds hold trivially when nothing ever moves.
+    expect(mutations).toBeGreaterThan(0);
   });
 
   it('is deterministic for a given PRNG seed', () => {
     const base = generateWorld({ seed: SEED, worldId: 'w-test' });
     const parent = firstOrganism(base);
-    const a = mutateGenotype(parent.genotype, new Prng(99), DEFAULT_SIMULATION_CONFIG);
-    const b = mutateGenotype(parent.genotype, new Prng(99), DEFAULT_SIMULATION_CONFIG);
+    const a = mutateGenotype(parent.genotype, new Prng(99), ALWAYS);
+    const b = mutateGenotype(parent.genotype, new Prng(99), ALWAYS);
     expect(a).toEqual(b);
+    // Two identical no-ops are also equal, so prove the mutation actually did something.
+    expect(a).not.toEqual(parent.genotype);
   });
 });
 
