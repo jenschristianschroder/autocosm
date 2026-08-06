@@ -36,6 +36,12 @@ param tickWriteTables array
 @description('Tables the think job may write: claims and proposals only.')
 param thinkWriteTables array
 
+@description('Tables the admin inspector may read. Reader across the store, minus the one it writes.')
+param adminReadTables array
+
+@description('Tables the admin inspector may write. Narrow: only the control table (runtime settings).')
+param adminWriteTables array
+
 @description('Container registry name, for AcrPull. Pull only — no runtime identity may push.')
 param containerRegistryName string
 
@@ -79,6 +85,13 @@ resource thinkIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01
   tags: tags
 }
 
+// The inspector: read-only across every table, no write role anywhere, and no inference role.
+resource adminIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' = {
+  name: 'id-${namePrefix}-admin'
+  location: location
+  tags: tags
+}
+
 // One flat list so the table-scoped assignments can be expressed as a single loop. The loop
 // expression must be resolvable before the deployment starts, so it carries a symbolic owner and
 // role name rather than the principal ids, which are only known once the identities exist.
@@ -86,7 +99,9 @@ var grants = concat(
   map(webReadTables, table => { table: table, role: 'reader', owner: 'web' }),
   map(webWriteTables, table => { table: table, role: 'contributor', owner: 'web' }),
   map(tickWriteTables, table => { table: table, role: 'contributor', owner: 'tick' }),
-  map(thinkWriteTables, table => { table: table, role: 'contributor', owner: 'think' })
+  map(thinkWriteTables, table => { table: table, role: 'contributor', owner: 'think' }),
+  map(adminReadTables, table => { table: table, role: 'reader', owner: 'admin' }),
+  map(adminWriteTables, table => { table: table, role: 'contributor', owner: 'admin' })
 )
 
 resource grantScopes 'Microsoft.Storage/storageAccounts/tableServices/tables@2023-05-01' existing = [
@@ -105,7 +120,9 @@ resource tableGrants 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
         ? webIdentity.properties.principalId
         : (grant.owner == 'tick'
             ? tickIdentity.properties.principalId
-            : thinkIdentity.properties.principalId)
+            : (grant.owner == 'think'
+                ? thinkIdentity.properties.principalId
+                : adminIdentity.properties.principalId))
       principalType: 'ServicePrincipal'
     }
   }
@@ -117,7 +134,7 @@ resource containerRegistry 'Microsoft.ContainerRegistry/registries@2023-11-01-pr
 
 // Pull only. No runtime identity is given AcrPush, so a compromised workload cannot replace the
 // image it and its siblings run.
-var pullOwners = ['web', 'tick', 'think']
+var pullOwners = ['web', 'tick', 'think', 'admin']
 
 resource registryPulls 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
   for owner in pullOwners: {
@@ -129,7 +146,9 @@ resource registryPulls 'Microsoft.Authorization/roleAssignments@2022-04-01' = [
         ? webIdentity.properties.principalId
         : (owner == 'tick'
             ? tickIdentity.properties.principalId
-            : thinkIdentity.properties.principalId)
+            : (owner == 'think'
+                ? thinkIdentity.properties.principalId
+                : adminIdentity.properties.principalId))
       principalType: 'ServicePrincipal'
     }
   }
@@ -162,3 +181,7 @@ output tickPrincipalId string = tickIdentity.properties.principalId
 output thinkIdentityId string = thinkIdentity.id
 output thinkClientId string = thinkIdentity.properties.clientId
 output thinkPrincipalId string = thinkIdentity.properties.principalId
+
+output adminIdentityId string = adminIdentity.id
+output adminClientId string = adminIdentity.properties.clientId
+output adminPrincipalId string = adminIdentity.properties.principalId

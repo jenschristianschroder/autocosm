@@ -4,10 +4,11 @@ import {
   createDecisionProvider,
   runThinkBatch,
   shouldFailClosed,
+  type ModelIoLogEntry,
   type ThinkBatchResult,
 } from '@autocosm/agent-runtime';
 import { Logger, Metrics } from '@autocosm/observability';
-import { createRepository, type WorldRepository } from '@autocosm/storage';
+import { createRepository, createSettingsStore, type WorldRepository } from '@autocosm/storage';
 import { loadThinkConfig, type ThinkConfig } from './config.js';
 import { RepositoryDecisionQueue, dayKeyFor, readDailySpend, recordDailySpend } from './queue.js';
 
@@ -62,7 +63,15 @@ export async function runThink(options: ThinkRunOptions): Promise<ThinkRunResult
     };
   }
 
-  const provider = createDecisionProvider(config.provider);
+  if (config.provider.logModelIo) {
+    logger.warn('think.modelIoLoggingEnabled', {
+      note: 'raw Azure OpenAI prompts and responses are being written to stdout; disable in production',
+    });
+  }
+  const provider = createDecisionProvider(
+    config.provider,
+    config.provider.logModelIo ? { recordModelIo: makeModelIoRecorder(config.worldId) } : {},
+  );
   const queue = new RepositoryDecisionQueue(repository, config.worldId, now);
 
   const result = await runThinkBatch({
@@ -98,6 +107,47 @@ export async function runThink(options: ThinkRunOptions): Promise<ThinkRunResult
   return { ...result, usedToday: usedToday + ledger.usedThisRun, durationMs };
 }
 
+/** Longest raw prompt/response fragment kept per field, so one line can never grow unbounded. */
+const MODEL_IO_FIELD_MAX = 8_000;
+
+/**
+ * Build the raw model-IO recorder.
+ *
+ * This deliberately bypasses the sanitising `Logger`: the entire point of the switch is to see the
+ * *unredacted* prompt and response, which the structured logger is built to withhold. It is gated
+ * behind `AUTOCOSM_LOG_OPENAI_IO` (default off), writes one bounded JSON line per event to stdout so
+ * it still reaches Log Analytics, and is loudly labelled so it cannot be mistaken for an ordinary
+ * log line or left on unnoticed.
+ */
+function makeModelIoRecorder(worldId: string): (entry: ModelIoLogEntry) => void {
+  return (entry) => {
+    const line = {
+      event: 'openai.io',
+      warning: 'RAW MODEL IO \u2014 unredacted prompt/response; disable in production',
+      worldId,
+      timestamp: new Date().toISOString(),
+      phase: entry.phase,
+      decisionId: entry.decisionId,
+      deployment: entry.deployment,
+      reason: entry.reason,
+      systemPrompt: boundText(entry.systemPrompt),
+      userPrompt: boundText(entry.userPrompt),
+      responseText: boundText(entry.responseText),
+      promptTokens: entry.promptTokens,
+      completionTokens: entry.completionTokens,
+      errorMessage: entry.errorMessage,
+    };
+    process.stdout.write(`${JSON.stringify(line)}\n`);
+  };
+}
+
+function boundText(text: string | undefined): string | undefined {
+  if (text === undefined) return undefined;
+  return text.length > MODEL_IO_FIELD_MAX
+    ? `${text.slice(0, MODEL_IO_FIELD_MAX)}\u2026[truncated ${text.length - MODEL_IO_FIELD_MAX} chars]`
+    : text;
+}
+
 export async function main(
   config: ThinkConfig = loadThinkConfig(),
   overrides: { readonly repository?: WorldRepository } = {},
@@ -112,7 +162,25 @@ export async function main(
   const repository = overrides.repository ?? createRepository(config.storage);
   await repository.initialise();
 
-  const result = await runThink({ repository, config, logger, metrics, holder });
+  // The admin inspector can flip raw model-IO logging at runtime by writing a runtime-settings row.
+  // It overrides the AUTOCOSM_LOG_OPENAI_IO env default and takes effect on this run. Reading it must
+  // never take the job down, so any failure falls back to the env-configured default.
+  let effectiveConfig = config;
+  try {
+    const stored = await createSettingsStore(config.storage).read();
+    if (stored.logOpenAiIo !== undefined && stored.logOpenAiIo !== config.provider.logModelIo) {
+      effectiveConfig = {
+        ...config,
+        provider: { ...config.provider, logModelIo: stored.logOpenAiIo },
+      };
+    }
+  } catch (error) {
+    logger.warn('think.settingsReadFailed', {
+      detail: error instanceof Error ? error.message : String(error),
+    });
+  }
+
+  const result = await runThink({ repository, config: effectiveConfig, logger, metrics, holder });
   logger.info('think.metrics', { snapshot: JSON.stringify(metrics.snapshot()).slice(0, 1500) });
   return result;
 }

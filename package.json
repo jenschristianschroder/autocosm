@@ -25,7 +25,7 @@
     "format:check": "prettier --check .",
     "typecheck": "tsc --build tsconfig.build.json",
     "test": "vitest run",
-    "test:code": "vitest run --project domain --project simulation --project storage --project agent-runtime --project observability --project world-web --project world-tick --project agent-think --project web-client",
+    "test:code": "vitest run --project domain --project simulation --project storage --project agent-runtime --project observability --project world-web --project world-tick --project agent-think --project world-admin --project web-client",
     "test:unit": "vitest run --project domain --project simulation --project observability --project agent-runtime",
     "test:integration": "vitest run --project storage --project world-web --project infra",
     "test:watch": "vitest",

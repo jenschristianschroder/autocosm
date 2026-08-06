@@ -28,6 +28,11 @@ export const ThinkConfigSchema = z.object({
     managedIdentityClientId: z.string().min(1).max(64).optional(),
     maxCompletionTokens: z.number().int().min(32).max(4_096).default(320),
     maxRetries: z.number().int().min(0).max(5).default(1),
+    /**
+     * Debug-only switch (`AUTOCOSM_LOG_OPENAI_IO`). When true the think job writes raw, unredacted
+     * Azure OpenAI request/response bodies to stdout. Default false; never leave on in production.
+     */
+    logModelIo: z.boolean().default(false),
   }),
   budget: DecisionBudgetSchema,
   /** Overall wall-clock ceiling. The job exits cleanly at this point whatever remains. */
@@ -85,6 +90,7 @@ export function loadThinkConfig(rawEnv: NodeJS.ProcessEnv = processEnvironment):
       managedIdentityClientId: env['AZURE_CLIENT_ID'],
       maxCompletionTokens: numberOr(env['AUTOCOSM_MAX_COMPLETION_TOKENS'], 320),
       maxRetries: numberOr(env['AUTOCOSM_MODEL_MAX_RETRIES'], 1),
+      logModelIo: env['AUTOCOSM_LOG_OPENAI_IO'] === 'true',
     },
     budget: {
       maxDecisionsPerRun: numberOr(env['AUTOCOSM_MAX_DECISIONS_PER_RUN'], undefined),

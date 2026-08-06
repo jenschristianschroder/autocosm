@@ -52,3 +52,12 @@ export {
   saveWorldBundle,
   type SaveWorldOptions,
 } from './bundle.js';
+export {
+  UnknownTable,
+  createRawTableReader,
+  type RawTablePage,
+  type RawTableReadOptions,
+  type RawTableReader,
+  type RawTableRow,
+} from './raw-reader.js';
+export { createSettingsStore, type RuntimeSettings, type SettingsStore } from './settings.js';

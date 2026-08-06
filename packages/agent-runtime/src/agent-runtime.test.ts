@@ -14,7 +14,11 @@ import {
 } from './ports.js';
 import { MAX_PROMPT_CHARS, SYSTEM_PROMPT, buildUserPrompt } from './prompt.js';
 import { runThinkBatch, type DecisionQueue } from './think-batch.js';
-import { AzureOpenAIDecisionProvider, type MinimalChatClient } from './azure-openai-provider.js';
+import {
+  AzureOpenAIDecisionProvider,
+  type MinimalChatClient,
+  type ModelIoLogEntry,
+} from './azure-openai-provider.js';
 
 /**
  * The agent runtime is the untrusted-input boundary. These tests exist to prove that no model
@@ -484,6 +488,7 @@ describe('provider factory', () => {
       azureOpenAiApiVersion: '2024-10-21',
       maxCompletionTokens: 320,
       maxRetries: 1,
+      logModelIo: false,
     });
     expect(provider.name).toBe('heuristic');
     expect(shouldFailClosed({ kind: 'heuristic' } as never)).toBe(false);
@@ -496,6 +501,7 @@ describe('provider factory', () => {
         azureOpenAiApiVersion: '2024-10-21',
         maxCompletionTokens: 320,
         maxRetries: 1,
+        logModelIo: false,
       }),
     ).toThrow(/requires AZURE_OPENAI_ENDPOINT/u);
   });
@@ -548,6 +554,39 @@ describe('azure openai provider', () => {
     expect(proposal.model).toBe('gpt-test');
     const body = create.mock.calls[0]?.[0] as { max_completion_tokens: number };
     expect(body.max_completion_tokens).toBe(200);
+  });
+
+  it('records raw request and response IO when a recorder is supplied', async () => {
+    const create = vi.fn().mockResolvedValue({
+      choices: [
+        { message: { content: '{"version":1,"action":{"type":"rest"},"rationale":"ok"}' } },
+      ],
+      usage: { prompt_tokens: 12, completion_tokens: 5 },
+    });
+    const entries: ModelIoLogEntry[] = [];
+    const provider = new AzureOpenAIDecisionProvider({
+      endpoint: 'https://example.openai.azure.com',
+      deployment: 'gpt-test',
+      apiVersion: '2024-10-21',
+      maxCompletionTokens: 200,
+      maxRetries: 0,
+      client: { chat: { completions: { create } } },
+      now: () => 1_700_000_000_000,
+      recordModelIo: (entry) => entries.push(entry),
+    });
+
+    await provider.propose({
+      decisionId: 'd-io',
+      observation,
+      reason: 'novelDiscovery',
+      timeoutMs: 5_000,
+    });
+
+    expect(entries.map((e) => e.phase)).toEqual(['request', 'response']);
+    expect(entries[0]?.systemPrompt?.length ?? 0).toBeGreaterThan(0);
+    expect(entries[0]?.userPrompt?.length ?? 0).toBeGreaterThan(0);
+    expect(entries[1]?.responseText).toContain('rest');
+    expect(entries[1]?.completionTokens).toBe(5);
   });
 
   it('rejects an action the model invented', async () => {

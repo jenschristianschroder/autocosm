@@ -38,6 +38,7 @@ export default defineConfig({
       project('world-web', './apps/world-web'),
       project('world-tick', './apps/world-tick'),
       project('agent-think', './apps/agent-think'),
+      project('world-admin', './apps/world-admin'),
       project('web-client', './apps/web-client'),
       project('infra', './tests/infra'),
     ],

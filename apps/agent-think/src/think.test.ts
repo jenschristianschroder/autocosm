@@ -94,6 +94,7 @@ function aConfig(overrides: Partial<ThinkConfig> = {}): ThinkConfig {
       azureOpenAiApiVersion: '2024-10-21',
       maxCompletionTokens: 320,
       maxRetries: 1,
+      logModelIo: false,
     },
     budget: {
       maxDecisionsPerRun: 12,

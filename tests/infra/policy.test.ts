@@ -291,11 +291,12 @@ describe('workload identities and least privilege', () => {
   const assignments = byType(foundation, 'Microsoft.Authorization/roleAssignments');
 
   it('creates one identity per runtime mode', () => {
-    expect(identities).toHaveLength(3);
+    expect(identities).toHaveLength(4);
     const names = identities.map((i) => String(i.name));
     expect(names.some((n) => n.includes('web'))).toBe(true);
     expect(names.some((n) => n.includes('tick'))).toBe(true);
     expect(names.some((n) => n.includes('think'))).toBe(true);
+    expect(names.some((n) => n.includes('admin'))).toBe(true);
   });
 
   it('grants only data-plane table roles, registry pull, and model inference', () => {
@@ -352,6 +353,7 @@ describe('workload identities and least privilege', () => {
     expect(principal).toContain('-think');
     expect(principal).not.toContain('-web');
     expect(principal).not.toContain('-tick');
+    expect(principal).not.toContain('-admin');
   });
 });
 
@@ -399,6 +401,14 @@ describe('the observer boundary is expressed in RBAC, not only in code', () => {
 
   it('makes the tick job the only writer of authoritative world state', () => {
     expect(new Set(list('tickWriteTables'))).toEqual(new Set(Object.values(TABLE_NAMES)));
+  });
+
+  it('gives the admin inspector read access to every table and write access to control alone', () => {
+    // Reader across the whole store...
+    expect(new Set(list('adminReadTables'))).toEqual(new Set(Object.values(TABLE_NAMES)));
+    // ...and contributor on exactly one table: `control`, which holds the runtime-settings row the
+    // inspector's OpenAI-logging toggle writes. It can mutate nothing else.
+    expect(new Set(list('adminWriteTables'))).toEqual(new Set(['control']));
   });
 
   it('declares every table the storage adapter uses', () => {
@@ -459,27 +469,57 @@ describe('applications', () => {
   const apps = byType(app, 'Microsoft.App/containerApps');
   const jobs = byType(app, 'Microsoft.App/jobs');
 
-  it('deploys exactly one web app and two jobs', () => {
-    expect(apps).toHaveLength(1);
+  it('deploys the web app, the internal admin app, and two jobs', () => {
+    expect(apps).toHaveLength(2);
     expect(jobs).toHaveLength(2);
+    expect(apps.some((a) => String(a.name).includes('-web'))).toBe(true);
+    expect(apps.some((a) => String(a.name).includes('-admin'))).toBe(true);
   });
 
-  it('exposes ingress only on the web app', () => {
-    const ingress = (apps[0]?.properties?.['configuration'] as Record<string, unknown>)[
-      'ingress'
-    ] as Record<string, unknown> | undefined;
-    expect(ingress?.['external']).toBe(true);
-    expect(ingress?.['allowInsecure']).toBe(false);
+  it('keeps external ingress off the admin app by default; only the web app is unconditionally public', () => {
+    const ingressOf = (resource: ArmResource): Record<string, unknown> | undefined =>
+      (resource.properties?.['configuration'] as Record<string, unknown>)['ingress'] as
+        Record<string, unknown> | undefined;
+    const web = apps.find((a) => String(a.name).includes('-web')) as ArmResource;
+    const adminApp = apps.find((a) => String(a.name).includes('-admin')) as ArmResource;
+
+    expect(ingressOf(web)?.['external']).toBe(true);
+    expect(ingressOf(web)?.['allowInsecure']).toBe(false);
+
+    // The inspector is internal unless explicitly opted in, and the default is off. Its external
+    // flag is driven by that parameter and is never hard-coded to true.
+    expect(appTemplate.parameters?.['adminExternalIngress']?.['defaultValue']).toBe(false);
+    expect(ingressOf(adminApp)?.['external']).not.toBe(true);
+    expect(ingressOf(adminApp)?.['allowInsecure']).toBe(false);
+
+    // Exactly one component is unconditionally public, and it is the web app.
+    const external = apps.filter((a) => ingressOf(a)?.['external'] === true);
+    expect(external).toHaveLength(1);
+    expect(String(external[0]?.name)).toContain('-web');
+
     for (const job of jobs) {
       const configuration = job.properties?.['configuration'] as Record<string, unknown>;
       expect(configuration['ingress'], String(job.name)).toBeUndefined();
     }
   });
 
-  it('scales the web app to zero', () => {
-    const templateBlock = apps[0]?.properties?.['template'] as Record<string, unknown>;
-    const scale = templateBlock['scale'] as Record<string, unknown>;
-    expect(scale['minReplicas']).toBe(0);
+  it('puts the admin app behind Entra sign-in whenever it is exposed externally', () => {
+    const authConfigs = byType(app, 'Microsoft.App/containerApps/authConfigs');
+    expect(authConfigs).toHaveLength(1);
+    const json = JSON.stringify(authConfigs[0]);
+    // Deployed only when the inspector is external — the same switch as the ingress.
+    expect(json).toContain('adminExternalIngress');
+    // An anonymous caller is redirected to Entra; the AAD provider is configured.
+    expect(json).toContain('RedirectToLoginPage');
+    expect(json).toContain('azureActiveDirectory');
+  });
+
+  it('scales the web and admin apps to zero', () => {
+    for (const resource of apps) {
+      const templateBlock = resource.properties?.['template'] as Record<string, unknown>;
+      const scale = templateBlock['scale'] as Record<string, unknown>;
+      expect(scale['minReplicas'], String(resource.name)).toBe(0);
+    }
   });
 
   it('runs one execution of each job at a time, with no retry', () => {
@@ -547,9 +587,9 @@ describe('applications', () => {
       return { args: containers[0]?.args ?? [], image: containers[0]?.image };
     });
     expect(modes.map((m) => m.args.join())).toEqual(
-      expect.arrayContaining(['web', 'tick', 'think']),
+      expect.arrayContaining(['web', 'tick', 'think', 'admin']),
     );
-    // One image, three modes: every container reference is the same parameter.
+    // One image, four modes: every container reference is the same parameter.
     expect(new Set(modes.map((m) => m.image)).size).toBe(1);
   });
 
@@ -571,7 +611,9 @@ describe('applications', () => {
     expect(envOf(jobs.find((j) => String(j.name).includes('tick')) as ArmResource)).not.toContain(
       'AZURE_OPENAI_ENDPOINT',
     );
-    expect(envOf(apps[0] as ArmResource)).not.toContain('AZURE_OPENAI_ENDPOINT');
+    for (const publicApp of apps) {
+      expect(envOf(publicApp), String(publicApp.name)).not.toContain('AZURE_OPENAI_ENDPOINT');
+    }
     expect(envOf(jobs.find((j) => String(j.name).includes('think')) as ArmResource)).toContain(
       'AZURE_OPENAI_ENDPOINT',
     );
@@ -607,6 +649,8 @@ describe('no secret is accepted or emitted', () => {
         .filter(([, spec]) => String(spec['type']).toLowerCase().startsWith('secure'))
         .map(([name]) => name);
     expect(secure(foundationTemplate)).toEqual([]);
-    expect(secure(appTemplate)).toEqual(['creatorSigningKey']);
+    expect(new Set(secure(appTemplate))).toEqual(
+      new Set(['creatorSigningKey', 'adminAuthClientSecret']),
+    );
   });
 });

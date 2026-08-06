@@ -59,6 +59,14 @@ param azureOpenAiEndpoint string = ''
 @description('Azure OpenAI deployment name. A configuration value, never a secret.')
 param azureOpenAiDeployment string = ''
 
+@description('''
+Debug only. When true the think job writes raw, unredacted Azure OpenAI request and response
+bodies to stdout (and therefore Log Analytics). Default false, and it should stay false in any
+real deployment: a prompt can quote an agent's private memory, and this path deliberately bypasses
+the structured logger's prompt/reasoning redaction. See docs/security.md.
+''')
+param logModelIo bool = false
+
 @description('Ceiling on model-backed decisions per think execution.')
 @minValue(1)
 @maxValue(200)
@@ -78,6 +86,24 @@ param maxCompletionTokens int = 320
 @minValue(1)
 @maxValue(10)
 param webMaxReplicas int = 3
+
+@description('Maximum replicas for the internal admin inspector. One is plenty for occasional use.')
+@minValue(1)
+@maxValue(4)
+param adminMaxReplicas int = 1
+
+@description('Expose the admin inspector on the public internet. When true it is placed behind Microsoft Entra sign-in; when false (default) it stays internal to the environment/VNet.')
+param adminExternalIngress bool = false
+
+@description('Entra application (client) ID used to sign in to the admin inspector when it is external. A configuration value, not a secret.')
+param adminAuthClientId string = ''
+
+@description('Entra tenant that issues admin sign-in tokens. Defaults to the deployment tenant.')
+param adminAuthTenantId string = tenant().tenantId
+
+@description('Client secret of the admin sign-in app registration. Required only when adminExternalIngress is true; stored as a Container App secret and never emitted as an output.')
+@secure()
+param adminAuthClientSecret string = ''
 
 @description('New lineages one anonymous creator may author per day.')
 @minValue(1)
@@ -131,6 +157,10 @@ resource tickIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-
 
 resource thinkIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
   name: 'id-${namePrefix}-think'
+}
+
+resource adminIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2023-01-31' existing = {
+  name: 'id-${namePrefix}-admin'
 }
 
 // The ordinary table service endpoint. Inside the VNet, private DNS resolves it to the private
@@ -263,6 +293,160 @@ resource web 'Microsoft.App/containerApps@2024-03-01' = {
 }
 
 // ------------------------------------------------------------------------------------------------
+// world-admin — read-only storage inspector with one runtime toggle.
+//
+// Internal ingress by default (reachable only inside the environment / VNet). It may be exposed
+// externally via adminExternalIngress, in which case Microsoft Entra sign-in is placed in front of
+// it by the platform (see adminAuth below), so it is never served to an anonymous internet client.
+// It runs under an identity that reads every table and writes only the control settings row.
+// ------------------------------------------------------------------------------------------------
+resource admin 'Microsoft.App/containerApps@2024-03-01' = {
+  name: 'ca-${namePrefix}-admin'
+  location: location
+  tags: tags
+  identity: {
+    type: 'UserAssigned'
+    userAssignedIdentities: {
+      '${adminIdentity.id}': {}
+    }
+  }
+  properties: {
+    environmentId: environment.id
+    workloadProfileName: 'Consumption'
+    configuration: {
+      activeRevisionsMode: 'Single'
+      ingress: {
+        // Internal by default; external only when opted in, and then always behind the Entra
+        // sign-in configured in adminAuth. A test asserts the web app is the only unconditionally
+        // external component.
+        external: adminExternalIngress
+        targetPort: 8080
+        transport: 'auto'
+        allowInsecure: false
+        traffic: [
+          {
+            latestRevision: true
+            weight: 100
+          }
+        ]
+      }
+      registries: [
+        {
+          server: registryServer
+          identity: adminIdentity.id
+        }
+      ]
+      // The Entra sign-in client secret exists only when the inspector is exposed externally.
+      secrets: adminExternalIngress
+        ? [
+            {
+              name: 'admin-auth-client-secret'
+              value: adminAuthClientSecret
+            }
+          ]
+        : []
+      maxInactiveRevisions: 2
+    }
+    template: {
+      containers: [
+        {
+          name: 'admin'
+          image: containerImage
+          args: ['admin']
+          resources: {
+            cpu: json('0.25')
+            memory: '0.5Gi'
+          }
+          env: [
+            { name: 'NODE_ENV', value: 'production' }
+            { name: 'AUTOCOSM_MODE', value: 'admin' }
+            { name: 'AUTOCOSM_WORLD_ID', value: worldId }
+            { name: 'AUTOCOSM_STORAGE_DRIVER', value: 'azureTables' }
+            { name: 'AUTOCOSM_LOG_LEVEL', value: 'info' }
+            { name: 'AZURE_TABLE_ENDPOINT', value: tableEndpoint }
+            { name: 'AZURE_CLIENT_ID', value: adminIdentity.properties.clientId }
+          ]
+          probes: [
+            {
+              type: 'Liveness'
+              httpGet: {
+                path: '/api/health'
+                port: 8080
+              }
+              initialDelaySeconds: 10
+              periodSeconds: 30
+              failureThreshold: 3
+            }
+            {
+              type: 'Readiness'
+              httpGet: {
+                path: '/api/readiness'
+                port: 8080
+              }
+              initialDelaySeconds: 5
+              periodSeconds: 10
+              failureThreshold: 6
+            }
+          ]
+        }
+      ]
+      scale: {
+        // Scale to zero: an internal debugging tool should cost nothing when nobody is inspecting.
+        minReplicas: 0
+        maxReplicas: adminMaxReplicas
+        rules: [
+          {
+            name: 'http'
+            http: {
+              metadata: {
+                concurrentRequests: '10'
+              }
+            }
+          }
+        ]
+      }
+    }
+  }
+}
+
+// Entra sign-in for the admin inspector, enabled only when it is exposed externally. The platform
+// intercepts every request and redirects an unauthenticated caller to Microsoft Entra, so the
+// inspector never serves a byte to an anonymous internet client. No secret is stored unless this is
+// switched on. Restrict who may sign in by requiring assignment on the app registration and
+// assigning only the intended user(s).
+resource adminAuth 'Microsoft.App/containerApps/authConfigs@2024-03-01' = if (adminExternalIngress) {
+  parent: admin
+  name: 'current'
+  properties: {
+    platform: {
+      enabled: true
+    }
+    globalValidation: {
+      unauthenticatedClientAction: 'RedirectToLoginPage'
+      redirectToProvider: 'azureactivedirectory'
+    }
+    identityProviders: {
+      azureActiveDirectory: {
+        enabled: true
+        registration: {
+          openIdIssuer: '${az.environment().authentication.loginEndpoint}${adminAuthTenantId}/v2.0'
+          clientId: adminAuthClientId
+          clientSecretSettingName: 'admin-auth-client-secret'
+        }
+        validation: {
+          allowedAudiences: [
+            adminAuthClientId
+          ]
+        }
+      }
+    }
+    login: {
+      preserveUrlFragmentsForLogins: false
+    }
+  }
+}
+
+// ------------------------------------------------------------------------------------------------
 // world-tick — advances authoritative state. No ingress.
 // ------------------------------------------------------------------------------------------------
 resource tick 'Microsoft.App/jobs@2024-03-01' = {
@@ -390,6 +574,7 @@ resource think 'Microsoft.App/jobs@2024-03-01' = {
             { name: 'AUTOCOSM_THINK_BUDGET_MS', value: '50000' }
             { name: 'AZURE_OPENAI_ENDPOINT', value: azureOpenAiEndpoint }
             { name: 'AZURE_OPENAI_DEPLOYMENT', value: azureOpenAiDeployment }
+            { name: 'AUTOCOSM_LOG_OPENAI_IO', value: string(logModelIo) }
           ]
         }
       ]
@@ -408,3 +593,12 @@ output tickJobName string = tick.name
 
 @description('Name of the scheduled think job, for `az containerapp job start`.')
 output thinkJobName string = think.name
+
+@description('FQDN of the admin inspector. Internal to the environment/VNet unless adminExternalIngress is true.')
+output adminFqdn string = admin.properties.configuration.ingress.fqdn
+
+@description('URL of the admin inspector. Public (behind Entra sign-in) only when adminExternalIngress is true; internal otherwise.')
+output adminUrl string = 'https://${admin.properties.configuration.ingress.fqdn}'
+
+@description('Reply URL to register on the Entra app registration when exposing the inspector externally.')
+output adminAuthRedirectUri string = 'https://${admin.properties.configuration.ingress.fqdn}/.auth/login/aad/callback'

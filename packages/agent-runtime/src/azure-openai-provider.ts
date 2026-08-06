@@ -23,6 +23,27 @@ import { SYSTEM_PROMPT, buildUserPrompt } from './prompt.js';
 
 const AZURE_COGNITIVE_SCOPE = 'https://cognitiveservices.azure.com/.default';
 
+/**
+ * A single raw model-IO event, handed to an optional recorder.
+ *
+ * This is the one place the system can surface *unredacted* prompt and response text. It exists
+ * only for deliberate, opt-in debugging: the shared structured logger intentionally redacts
+ * prompts and reasoning, so a caller that wants the raw bytes must provide a recorder and accept
+ * responsibility for where they go. The provider never bounds, stores or ships these itself.
+ */
+export interface ModelIoLogEntry {
+  readonly phase: 'request' | 'response' | 'error';
+  readonly decisionId: string;
+  readonly deployment: string;
+  readonly reason: string;
+  readonly systemPrompt?: string;
+  readonly userPrompt?: string;
+  readonly responseText?: string;
+  readonly promptTokens?: number;
+  readonly completionTokens?: number;
+  readonly errorMessage?: string;
+}
+
 export interface AzureOpenAIProviderOptions {
   readonly endpoint: string;
   readonly deployment: string;
@@ -34,6 +55,11 @@ export interface AzureOpenAIProviderOptions {
   readonly now?: () => number;
   /** Injectable for tests; production always builds a managed-identity client. */
   readonly client?: MinimalChatClient;
+  /**
+   * Optional sink for raw request/response bodies. Absent by default, so nothing is emitted.
+   * Wired only when `AUTOCOSM_LOG_OPENAI_IO=true`. See `ModelIoLogEntry`.
+   */
+  readonly recordModelIo?: (entry: ModelIoLogEntry) => void;
 }
 
 /** The narrow slice of the OpenAI client this provider uses, so tests need no network. */
@@ -60,12 +86,14 @@ export class AzureOpenAIDecisionProvider implements DecisionProvider {
   readonly name = 'azure-openai';
   readonly #options: AzureOpenAIProviderOptions;
   readonly #now: () => number;
+  readonly #recordModelIo: ((entry: ModelIoLogEntry) => void) | undefined;
   #client: MinimalChatClient | undefined;
 
   constructor(options: AzureOpenAIProviderOptions) {
     this.#options = options;
     this.#now = options.now ?? Date.now;
     this.#client = options.client;
+    this.#recordModelIo = options.recordModelIo;
     if (options.endpoint.includes('api-key') || /[?&]sig=/u.test(options.endpoint)) {
       throw new Error('Azure OpenAI endpoint must not embed credentials');
     }
@@ -86,13 +114,23 @@ export class AzureOpenAIDecisionProvider implements DecisionProvider {
       controller.abort();
     });
 
+    const userPrompt = buildUserPrompt(request.observation, request.reason);
+    this.#recordModelIo?.({
+      phase: 'request',
+      decisionId: request.decisionId,
+      deployment: this.#options.deployment,
+      reason: request.reason,
+      systemPrompt: SYSTEM_PROMPT,
+      userPrompt,
+    });
+
     try {
       const completion = await client.chat.completions.create(
         {
           model: this.#options.deployment,
           messages: [
             { role: 'system', content: SYSTEM_PROMPT },
-            { role: 'user', content: buildUserPrompt(request.observation, request.reason) },
+            { role: 'user', content: userPrompt },
           ],
           max_completion_tokens: this.#options.maxCompletionTokens,
           response_format: { type: 'json_object' },
@@ -101,12 +139,23 @@ export class AzureOpenAIDecisionProvider implements DecisionProvider {
       );
 
       const content = completion.choices[0]?.message?.content ?? '';
+      const usage = completion.usage ?? undefined;
+      this.#recordModelIo?.({
+        phase: 'response',
+        decisionId: request.decisionId,
+        deployment: this.#options.deployment,
+        reason: request.reason,
+        responseText: content,
+        ...(usage?.prompt_tokens === undefined ? {} : { promptTokens: usage.prompt_tokens }),
+        ...(usage?.completion_tokens === undefined
+          ? {}
+          : { completionTokens: usage.completion_tokens }),
+      });
       if (content.trim().length === 0) {
         throw new DecisionProviderError(this.name, 'model returned an empty completion', true);
       }
 
       const { action, rationale } = parseProposal(this.name, content, request.observation);
-      const usage = completion.usage ?? undefined;
       return toProposal({
         provider: this.name,
         model: this.#options.deployment,
@@ -120,6 +169,13 @@ export class AzureOpenAIDecisionProvider implements DecisionProvider {
           : { completionTokens: usage.completion_tokens }),
       });
     } catch (cause) {
+      this.#recordModelIo?.({
+        phase: 'error',
+        decisionId: request.decisionId,
+        deployment: this.#options.deployment,
+        reason: request.reason,
+        errorMessage: describe(cause),
+      });
       if (cause instanceof DecisionProviderError) throw cause;
       if (isProposalRejection(cause)) throw cause;
       throw new DecisionProviderError(this.name, describe(cause), isRetryable(cause), {

@@ -8,6 +8,7 @@
     { "path": "./packages/agent-runtime" },
     { "path": "./apps/world-web" },
     { "path": "./apps/world-tick" },
-    { "path": "./apps/agent-think" }
+    { "path": "./apps/agent-think" },
+    { "path": "./apps/world-admin" }
   ]
 }

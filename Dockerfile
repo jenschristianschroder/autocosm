@@ -1,11 +1,12 @@
 # syntax=docker/dockerfile:1.7
 #
-# One image, three modes.
+# One image, four modes.
 #
-# The product constraint is explicit: never one process or container per agent. `web`, `tick` and
-# `think` share the same compiled monorepo and the same storage adapter, so a build that works for
-# one works for all three. The entrypoint dispatches on argv[0]/AUTOCOSM_MODE; there is no separate
-# Dockerfile, no separate tag, and no drift between what the API sees and what the simulation sees.
+# The product constraint is explicit: never one process or container per agent. `web`, `tick`,
+# `think` and `admin` share the same compiled monorepo and the same storage adapter, so a build
+# that works for one works for all of them. The entrypoint dispatches on argv[0]/AUTOCOSM_MODE;
+# there is no separate Dockerfile, no separate tag, and no drift between what the API sees and what
+# the simulation sees.
 
 # ---------------------------------------------------------------------------------------------
 # deps — install once from the committed lockfile so the layer caches across source changes.
@@ -22,6 +23,7 @@ COPY packages/observability/package.json packages/observability/
 COPY apps/world-web/package.json apps/world-web/
 COPY apps/world-tick/package.json apps/world-tick/
 COPY apps/agent-think/package.json apps/agent-think/
+COPY apps/world-admin/package.json apps/world-admin/
 COPY apps/web-client/package.json apps/web-client/
 
 # BuildKit cache mounts (`--mount=type=cache`) are intentionally not used here: ACR Tasks builds
@@ -43,12 +45,12 @@ RUN npm run typecheck \
  && npm run build --workspace @autocosm/web-client
 
 # ---------------------------------------------------------------------------------------------
-# prune — production-only dependency tree for the three SERVER workspaces.
+# prune — production-only dependency tree for the four SERVER workspaces.
 #
 # `apps/web-client` is a build-time workspace: Vite bundles React and Babylon.js into
-# world-web/public, and no server module ever imports them. Filtering the install to the three
-# runtime workspaces keeps ~100 MB of browser libraries out of the image, which is roughly half
-# the dependency tree and directly buys back cold-start time on a scale-to-zero app.
+# world-web/public, and no server module ever imports them. Filtering the install to the runtime
+# workspaces keeps ~100 MB of browser libraries out of the image, which is roughly half the
+# dependency tree and directly buys back cold-start time on a scale-to-zero app.
 # ---------------------------------------------------------------------------------------------
 FROM deps AS prune
 WORKDIR /app
@@ -56,6 +58,7 @@ RUN npm ci --omit=dev --no-audit --no-fund \
       --workspace @autocosm/world-web \
       --workspace @autocosm/world-tick \
       --workspace @autocosm/agent-think \
+      --workspace @autocosm/world-admin \
       --include-workspace-root
 
 # ---------------------------------------------------------------------------------------------
@@ -95,6 +98,8 @@ COPY --from=build --chown=root:root /app/apps/world-tick/package.json   ./apps/w
 COPY --from=build --chown=root:root /app/apps/world-tick/dist           ./apps/world-tick/dist
 COPY --from=build --chown=root:root /app/apps/agent-think/package.json  ./apps/agent-think/package.json
 COPY --from=build --chown=root:root /app/apps/agent-think/dist          ./apps/agent-think/dist
+COPY --from=build --chown=root:root /app/apps/world-admin/package.json  ./apps/world-admin/package.json
+COPY --from=build --chown=root:root /app/apps/world-admin/dist          ./apps/world-admin/dist
 
 COPY --chown=root:root docker-entrypoint.sh /usr/local/bin/autocosm
 # Strip any CR the file may have picked up on a Windows checkout. A `#!/bin/sh\r` shebang makes

@@ -98,6 +98,14 @@ var thinkWriteTables = [
   'control'
 ]
 
+// The inspector reads every table, and writes exactly one thing: the runtime-settings row in the
+// control table (the OpenAI request/response logging toggle). It holds reader across the store and
+// contributor on `control` alone, so it can read everything but mutate only that one switch.
+var adminReadTables = allTables
+var adminWriteTables = [
+  'control'
+]
+
 module network 'modules/network.bicep' = {
   name: 'network'
   params: {
@@ -142,6 +150,8 @@ module identity 'modules/identity.bicep' = {
     webWriteTables: webWriteTables
     tickWriteTables: tickWriteTables
     thinkWriteTables: thinkWriteTables
+    adminReadTables: adminReadTables
+    adminWriteTables: adminWriteTables
     containerRegistryName: platform.outputs.containerRegistryName
     azureOpenAiAccountName: azureOpenAiAccountName
   }
@@ -173,3 +183,6 @@ output tickClientId string = identity.outputs.tickClientId
 
 @description('Client id of the think workload identity.')
 output thinkClientId string = identity.outputs.thinkClientId
+
+@description('Client id of the admin inspector workload identity, set as AZURE_CLIENT_ID on the admin app.')
+output adminClientId string = identity.outputs.adminClientId

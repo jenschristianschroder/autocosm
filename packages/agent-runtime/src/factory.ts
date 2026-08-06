@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { AzureOpenAIDecisionProvider } from './azure-openai-provider.js';
+import { AzureOpenAIDecisionProvider, type ModelIoLogEntry } from './azure-openai-provider.js';
 import { HeuristicDecisionProvider } from './heuristic-provider.js';
 import type { DecisionProvider } from './ports.js';
 
@@ -22,11 +22,24 @@ export const DecisionProviderConfigSchema = z.object({
   managedIdentityClientId: z.string().min(1).max(64).optional(),
   maxCompletionTokens: z.number().int().min(32).max(4_096).default(320),
   maxRetries: z.number().int().min(0).max(5).default(1),
+  /**
+   * Debug-only: when true, raw request/response bodies are surfaced to the caller's recorder.
+   * Default false. Off in every ordinary deployment; see docs/security.md.
+   */
+  logModelIo: z.boolean().default(false),
 });
 
 export type DecisionProviderConfig = z.infer<typeof DecisionProviderConfigSchema>;
 
-export function createDecisionProvider(config: DecisionProviderConfig): DecisionProvider {
+export interface DecisionProviderHooks {
+  /** Raw model-IO sink, forwarded to the provider only when `logModelIo` is enabled. */
+  readonly recordModelIo?: (entry: ModelIoLogEntry) => void;
+}
+
+export function createDecisionProvider(
+  config: DecisionProviderConfig,
+  hooks: DecisionProviderHooks = {},
+): DecisionProvider {
   if (config.kind === 'heuristic') return new HeuristicDecisionProvider();
 
   if (!config.azureOpenAiEndpoint || !config.azureOpenAiDeployment) {
@@ -35,6 +48,9 @@ export function createDecisionProvider(config: DecisionProviderConfig): Decision
     );
   }
 
+  // The recorder is forwarded only when logging is explicitly enabled, so a stray hook cannot
+  // start capturing prompts on its own.
+  const recordModelIo = config.logModelIo ? hooks.recordModelIo : undefined;
   return new AzureOpenAIDecisionProvider({
     endpoint: config.azureOpenAiEndpoint,
     deployment: config.azureOpenAiDeployment,
@@ -44,6 +60,7 @@ export function createDecisionProvider(config: DecisionProviderConfig): Decision
       : { managedIdentityClientId: config.managedIdentityClientId }),
     maxCompletionTokens: config.maxCompletionTokens,
     maxRetries: config.maxRetries,
+    ...(recordModelIo === undefined ? {} : { recordModelIo }),
   });
 }
 

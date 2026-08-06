@@ -139,7 +139,9 @@ jobs:
             --resource-group "${{ vars.AZURE_RESOURCE_GROUP }}" \
             --name "autocosm-foundation-${{ github.run_number }}" \
             --template-file infra/foundation.bicep \
-            --parameters namePrefix="${{ vars.AUTOCOSM_NAME_PREFIX || 'autocosm' }}" \
+            --parameters \
+              namePrefix="${{ vars.AUTOCOSM_NAME_PREFIX || 'autocosm' }}" \
+              azureOpenAiAccountName="${{ vars.AZURE_OPENAI_ACCOUNT_NAME }}" \
             --query properties.outputs -o json > foundation-outputs.json
           echo "registry=$(jq -r '.registryLoginServer.value' foundation-outputs.json)" >> "$GITHUB_OUTPUT"
 
@@ -170,8 +172,10 @@ jobs:
             --parameters \
               namePrefix="${{ vars.AUTOCOSM_NAME_PREFIX || 'autocosm' }}" \
               containerImage="${REGISTRY}/autocosm:${{ github.sha }}" \
+              decisionProvider="${{ vars.AUTOCOSM_DECISION_PROVIDER || 'heuristic' }}" \
               azureOpenAiEndpoint="${{ vars.AZURE_OPENAI_ENDPOINT }}" \
               azureOpenAiDeployment="${{ vars.AZURE_OPENAI_DEPLOYMENT }}" \
+              logModelIo="${{ vars.AUTOCOSM_LOG_OPENAI_IO || 'false' }}" \
             --query properties.outputs -o json > app-outputs.json
           echo "fqdn=$(jq -r '.webFqdn.value' app-outputs.json)" >> "$GITHUB_OUTPUT"
 
