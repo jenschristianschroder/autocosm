@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { DRIVE_IDS, HABITAT_PREFERENCES, SIGNAL_CHANNELS } from './entities.js';
-import { MATERIAL_PROPERTY_IDS } from './materials.js';
+import { asMaterialId } from './ids.js';
+import { deriveRecipeKey, MATERIAL_PROPERTY_IDS } from './materials.js';
 import { STRUCTURE_FUNCTIONS, STRUCTURE_PATTERNS } from './structures.js';
 import { TRAIT_IDS } from './traits.js';
 import { WORLD_SPAN_CU } from './geometry.js';
@@ -104,14 +105,31 @@ export type RegionRecord = z.infer<typeof RegionRecordSchema>;
  * The single definition of a persisted recipe. Agent knowledge and teach signals both reference it,
  * so a field added here cannot be silently dropped by one of the two paths — Zod strips unknown
  * keys, which makes a duplicated shape a quiet data-loss bug rather than a validation failure.
+ *
+ * `key` is absent from records written before recipes became content-addressed. It is a pure
+ * function of `components`, so those records are up-converted on read rather than rejected: the
+ * derived key is identical to the one a fresh write would produce, which keeps an existing world
+ * loadable without a destructive regeneration. Writes always emit `key`.
  */
-export const KnownRecipeRecordSchema = z.object({
-  key: z.string().min(1).max(64),
-  label: z.string().max(64),
-  components: z.array(MaterialComponentRecordSchema).max(8),
-  learnedAtTick: nonNegative,
-  learnedFromLineageId: idSchema.optional(),
-});
+export const KnownRecipeRecordSchema = z
+  .object({
+    key: z.string().min(1).max(64).optional(),
+    label: z.string().max(64),
+    components: z.array(MaterialComponentRecordSchema).max(8),
+    learnedAtTick: nonNegative,
+    learnedFromLineageId: idSchema.optional(),
+  })
+  .transform((recipe) => ({
+    ...recipe,
+    key:
+      recipe.key ??
+      deriveRecipeKey(
+        recipe.components.map((c) => ({
+          materialId: asMaterialId(c.materialId),
+          quantity: c.quantity,
+        })),
+      ),
+  }));
 
 export const AgentRecordSchema = versioned({
   id: idSchema,

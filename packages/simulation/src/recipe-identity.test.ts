@@ -13,6 +13,7 @@ import { resolveAction, EnergyLedger, type ResolutionContext } from './resolve.j
 import { EventSink } from './events.js';
 import { DEFAULT_SIMULATION_CONFIG } from './config.js';
 import { toDraft, sortedIds, type WorldState } from './state.js';
+import { toRecords, fromRecords } from './persistence.js';
 
 /**
  * A recipe's identity is its content, never its display label.
@@ -225,5 +226,36 @@ describe('recipe identity', () => {
         expect(deriveRecipeKey([...recipe.components].reverse())).toBe(recipe.key);
       }
     }
+  });
+
+  it('restores the key of a recipe stored before recipes were content-addressed', () => {
+    // A live world contains records written without `key`. Rejecting them would strand the world,
+    // and defaulting them to a placeholder would silently break teaching. The key is a pure
+    // function of the components the old record already carries, so it is recomputed on read.
+    const bundle = toRecords(state);
+    const legacy = {
+      ...bundle,
+      agents: bundle.agents.map((agent) => ({
+        ...agent,
+        knowledge: {
+          ...agent.knowledge,
+          recipes: agent.knowledge.recipes.map(({ key: _dropped, ...rest }) => rest),
+        },
+      })),
+    };
+    expect(legacy.agents.some((a) => a.knowledge.recipes.length > 0)).toBe(true);
+
+    const restored = fromRecords(legacy as unknown as Parameters<typeof fromRecords>[0]);
+
+    let checked = 0;
+    for (const [agentId, agent] of restored.agents) {
+      const original = state.agents.get(agentId);
+      expect(agent.knowledge.recipes).toEqual(original?.knowledge.recipes);
+      for (const recipe of agent.knowledge.recipes) {
+        expect(recipe.key).toBe(deriveRecipeKey(recipe.components));
+        checked += 1;
+      }
+    }
+    expect(checked).toBeGreaterThan(0);
   });
 });
