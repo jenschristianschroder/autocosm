@@ -587,7 +587,7 @@ function propagateKnowledge(draft: WorldDraft, events: EventSink): void {
       if (dx * dx + dz * dz > signal.radiusCu * signal.radiusCu) continue;
       const agent = draft.agents.get(listener.agentId);
       if (!agent) continue;
-      if (agent.knowledge.recipes.some((r) => r.label === signal.recipe?.label)) continue;
+      if (agent.knowledge.recipes.some((r) => r.key === signal.recipe?.key)) continue;
       draft.agents.set(agent.id, {
         ...agent,
         knowledge: {
@@ -611,6 +611,7 @@ function propagateKnowledge(draft: WorldDraft, events: EventSink): void {
         lineageId: signal.lineageId,
         organismId: signal.organismId,
         payload: {
+          recipeKey: signal.recipe.key,
           recipeLabel: signal.recipe.label,
           toLineageIds: [...new Set(taught)].sort(),
         },

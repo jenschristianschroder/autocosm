@@ -98,7 +98,15 @@ export interface ObservedSignal {
   readonly kin: boolean;
   readonly distanceCu: number;
   readonly intensity: PerMille;
+  /** Identity of the taught recipe. Quote this back in a `teach` signal, never the label. */
+  readonly recipeKey?: string | undefined;
   readonly recipeLabel?: string | undefined;
+}
+
+/** A recipe the observer already knows. `key` is the handle; `label` is only for comprehension. */
+export interface ObservedRecipe {
+  readonly key: string;
+  readonly label: string;
 }
 
 export interface ObservedEnvironment {
@@ -139,7 +147,7 @@ export interface Observation {
   readonly drives: Readonly<Record<DriveId, PerMille>>;
   readonly temperament: Temperament;
   readonly aspiration: string;
-  readonly knownRecipes: readonly string[];
+  readonly knownRecipes: readonly ObservedRecipe[];
   /** Actions the organism's evolved capabilities currently permit. */
   readonly availableActions: readonly string[];
 }
@@ -287,6 +295,7 @@ export const ObservationSchema = z.object({
         kin: z.boolean(),
         distanceCu: z.number().finite(),
         intensity: perMille,
+        recipeKey: boundedText(64).optional(),
         recipeLabel: boundedText(64).optional(),
       }),
     )
@@ -313,7 +322,7 @@ export const ObservationSchema = z.object({
   drives: z.record(z.enum(DRIVE_IDS), perMille),
   temperament: z.enum(['cautious', 'balanced', 'bold', 'gregarious', 'solitary']),
   aspiration: boundedText(280),
-  knownRecipes: z.array(boundedText(64)).max(32),
+  knownRecipes: z.array(z.object({ key: boundedText(64), label: boundedText(64) })).max(32),
   availableActions: z.array(boundedText(32)).max(32),
 });
 

@@ -146,6 +146,12 @@ export interface LineageKnowledge {
 }
 
 export interface KnownRecipe {
+  /**
+   * Content-addressed identity from {@link deriveRecipeKey}. All matching, teaching and
+   * deduplication goes through this. Never match on `label`.
+   */
+  readonly key: string;
+  /** Display text only. Free to be rewritten without affecting behaviour. */
   readonly label: string;
   readonly components: readonly MaterialComponent[];
   readonly learnedAtTick: TickIndex;

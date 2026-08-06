@@ -165,7 +165,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
   if (can.has('signal') && rng.chance(scaleByPerMille(200, drives.cooperate))) {
     const teachable = observation.knownRecipes[0];
     if (teachable !== undefined && rng.chance(400)) {
-      return { type: 'signal', channel: 'teach', intensity: 600, recipeLabel: teachable };
+      return { type: 'signal', channel: 'teach', intensity: 600, recipeKey: teachable.key };
     }
     const alarm = observation.organisms.some((o) => !o.kin && o.threatBand === 'dangerous');
     return { type: 'signal', channel: alarm ? 'alarm' : 'food', intensity: 500 };

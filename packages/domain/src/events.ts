@@ -108,6 +108,7 @@ export interface EventPayloads {
   };
   structureCollapsed: { readonly structureId: StructureId };
   knowledgeShared: {
+    readonly recipeKey: string;
     readonly recipeLabel: string;
     readonly toLineageIds: readonly LineageId[];
   };

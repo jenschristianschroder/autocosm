@@ -53,7 +53,8 @@ export const SignalActionSchema = z.object({
   type: z.literal('signal'),
   channel: z.enum(SIGNAL_CHANNELS),
   intensity: perMille,
-  recipeLabel: z.string().min(1).max(48).optional(),
+  /** Content-addressed recipe key, not a label — see `deriveRecipeKey`. */
+  recipeKey: z.string().min(1).max(64).optional(),
 });
 
 export const AttachActionSchema = z.object({

@@ -17,11 +17,14 @@ import {
   clampPerMille,
   combineMaterials,
   derivePhenotype,
+  deriveMaterialId,
+  deriveRecipeKey,
   deriveStructureFunctions,
   describeStructure,
   distance,
   initialIntegrity,
   makePosition,
+  normaliseComponents,
   recordUsage,
   regionIdOf,
   scaleByPerMille,
@@ -382,9 +385,11 @@ function applySignal(
   if (radius <= 0) return reject('capabilityNotEvolved');
 
   const agent = ctx.draft.agents.get(organism.agentId);
+  // Matched by content-addressed key, never by label: a label is display text that may be
+  // rewritten, and matching on it would silently sever cultural transmission.
   const recipe =
-    action.channel === 'teach' && action.recipeLabel !== undefined
-      ? agent?.knowledge.recipes.find((r) => r.label === action.recipeLabel)
+    action.channel === 'teach' && action.recipeKey !== undefined
+      ? agent?.knowledge.recipes.find((r) => r.key === action.recipeKey)
       : undefined;
   if (action.channel === 'teach' && !recipe) return reject('unknownTarget');
 
@@ -505,7 +510,7 @@ function applyCombine(
   if (organism.energy < cost) return reject('insufficientEnergy');
 
   // The derived material's properties are a volume-weighted blend. The label is decoration.
-  const derivedId = asMaterialId(deriveMaterialId(components));
+  const derivedId = deriveMaterialId(components);
   const existing = ctx.draft.materials.get(derivedId);
   const definition =
     existing ??
@@ -528,7 +533,8 @@ function applyCombine(
     inventory: addInventory(inventory, { materialId: derivedId, quantity: produced }),
   });
   learnMaterial(ctx, organism.agentId, derivedId);
-  learnRecipe(ctx, organism.agentId, action.label.slice(0, 48), components);
+  // The recipe is labelled by what it produces, so its label always matches the material.
+  learnRecipe(ctx, organism.agentId, deriveRecipeKey(components), definition.label, components);
   if (!existing) {
     ctx.events.emit('materialDiscovered', organism.regionId, {
       summary: `${organism.id} produced ${definition.label}`,
@@ -781,13 +787,11 @@ function strongestFunction(functions: readonly DerivedFunction[]) {
 function toComponents(
   raw: readonly { readonly materialId: string; readonly quantity: number }[],
 ): MaterialComponent[] {
-  const merged = new Map<string, number>();
-  for (const c of raw) {
-    merged.set(c.materialId, (merged.get(c.materialId) ?? 0) + Math.max(0, Math.trunc(c.quantity)));
-  }
-  return [...merged.entries()]
-    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
-    .map(([materialId, quantity]) => ({ materialId: asMaterialId(materialId), quantity }));
+  return [
+    ...normaliseComponents(
+      raw.map((c) => ({ materialId: asMaterialId(c.materialId), quantity: c.quantity })),
+    ),
+  ];
 }
 
 function hasInventory(organism: Organism, components: readonly MaterialComponent[]): boolean {
@@ -822,16 +826,6 @@ function addInventory(inventory: InventoryEntry[], entry: InventoryEntry): Inven
 }
 
 /** Derived materials are content-addressed so the same recipe always yields the same id. */
-function deriveMaterialId(components: readonly MaterialComponent[]): string {
-  const parts = components.map((c) => `${c.materialId}x${c.quantity}`).join('_');
-  let hash = 0x811c9dc5;
-  for (let i = 0; i < parts.length; i += 1) {
-    hash ^= parts.charCodeAt(i);
-    hash = Math.imul(hash, 0x01000193);
-  }
-  return `mx${(hash >>> 0).toString(36)}`;
-}
-
 function learnMaterial(
   ctx: ResolutionContext,
   agentId: Organism['agentId'],
@@ -866,16 +860,18 @@ function learnStructure(
 function learnRecipe(
   ctx: ResolutionContext,
   agentId: Organism['agentId'],
+  key: string,
   label: string,
   components: readonly MaterialComponent[],
   fromLineageId?: LineageId,
 ): void {
   const agent = ctx.draft.agents.get(agentId);
   if (!agent) return;
-  if (agent.knowledge.recipes.some((r) => r.label === label)) return;
+  if (agent.knowledge.recipes.some((r) => r.key === key)) return;
   const recipes = [
     ...agent.knowledge.recipes,
     {
+      key,
       label,
       components,
       learnedAtTick: ctx.draft.world.tick,

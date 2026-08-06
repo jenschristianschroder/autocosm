@@ -201,6 +201,55 @@ export function blendProperties(
   return Object.freeze(out as Record<MaterialPropertyId, PerMille>);
 }
 
+/**
+ * Reduce a component list to its one canonical form: duplicates merged, then ordered by id.
+ *
+ * Content addressing is only stable if the input is canonical first, so every identity derived
+ * from ingredients normalises before hashing.
+ */
+export function normaliseComponents(
+  components: readonly MaterialComponent[],
+): readonly MaterialComponent[] {
+  const merged = new Map<MaterialId, number>();
+  for (const component of components) {
+    const quantity = Math.max(0, toInt(component.quantity));
+    merged.set(component.materialId, (merged.get(component.materialId) ?? 0) + quantity);
+  }
+  return [...merged.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([materialId, quantity]) => ({ materialId, quantity }));
+}
+
+/**
+ * Content-addressed identity for a derived material.
+ *
+ * The same ingredients always yield the same id, so a composite rediscovered independently by two
+ * lineages converges on a single material rather than two indistinguishable ones. Ordering and
+ * duplication in the proposal cannot change the result.
+ */
+export function deriveMaterialId(components: readonly MaterialComponent[]): MaterialId {
+  const parts = normaliseComponents(components)
+    .map((c) => `${c.materialId}x${c.quantity}`)
+    .join('_');
+  let hash = 0x811c9dc5;
+  for (let i = 0; i < parts.length; i += 1) {
+    hash ^= parts.charCodeAt(i);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return asMaterialId(`mx${(hash >>> 0).toString(36)}`);
+}
+
+/**
+ * Stable identity for a recipe: a recipe is identified by what it produces.
+ *
+ * Recipes are matched, taught and deduplicated by this key and **never** by their label. A label is
+ * display text that may be rewritten at any time; matching on it would silently sever knowledge
+ * transmission and diverge replay the moment naming changed.
+ */
+export function deriveRecipeKey(components: readonly MaterialComponent[]): string {
+  return deriveMaterialId(components);
+}
+
 /** Total volume of a component list, in `mu`. */
 export function totalVolume(components: readonly MaterialComponent[]): Mu {
   let volume = 0;

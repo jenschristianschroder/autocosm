@@ -29,7 +29,7 @@ function fingerprint(state: WorldState): string {
     `calendar:${state.world.calendar.dayLengthTicks}/${state.world.calendar.light}/${state.world.calendar.heat}`,
     `stats:${JSON.stringify(state.world.stats)}`,
     `signals:${state.signals
-      .map((s) => `${s.organismId}:${s.channel}:${s.intensity}:${s.recipe?.label ?? '-'}`)
+      .map((s) => `${s.organismId}:${s.channel}:${s.intensity}:${s.recipe?.key ?? '-'}`)
       .join(',')}`,
   ];
   for (const id of sortedIds(state.organisms)) {
@@ -90,7 +90,7 @@ function fingerprint(state: WorldState): string {
         a.status,
         JSON.stringify(a.drives),
         [...a.knowledge.knownMaterialIds].join(','),
-        a.knowledge.recipes.map((r) => `${r.label}#${r.components.length}`).join('+'),
+        a.knowledge.recipes.map((r) => `${r.key}:${r.label}#${r.components.length}`).join('+'),
         [...a.knowledge.knownStructureIds].join(','),
         (state.memories.get(a.id) ?? []).map((m) => `${m.id}:${m.salience}:${m.note}`).join(';'),
         (state.goals.get(a.id) ?? []).map((g) => `${g.id}:${g.status}`).join(';'),

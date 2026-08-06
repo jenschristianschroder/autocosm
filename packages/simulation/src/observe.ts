@@ -180,7 +180,9 @@ export function observe(draft: WorldState, organism: Organism, phenotype?: Pheno
       kin: signal.lineageId === organism.lineageId,
       distanceCu: d,
       intensity: signal.intensity,
-      ...(signal.recipe === undefined ? {} : { recipeLabel: signal.recipe.label }),
+      ...(signal.recipe === undefined
+        ? {}
+        : { recipeKey: signal.recipe.key, recipeLabel: signal.recipe.label }),
     });
   }
   signals.sort((a, b) => a.distanceCu - b.distanceCu);
@@ -223,7 +225,7 @@ export function observe(draft: WorldState, organism: Organism, phenotype?: Pheno
     },
     temperament: agent?.temperament ?? 'balanced',
     aspiration: agent?.aspiration ?? '',
-    knownRecipes: (agent?.knowledge.recipes ?? []).map((r) => r.label),
+    knownRecipes: (agent?.knowledge.recipes ?? []).map((r) => ({ key: r.key, label: r.label })),
     availableActions: availableActions(organism, p),
   };
 }

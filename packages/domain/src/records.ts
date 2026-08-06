@@ -100,6 +100,19 @@ export const RegionRecordSchema = versioned({
 
 export type RegionRecord = z.infer<typeof RegionRecordSchema>;
 
+/**
+ * The single definition of a persisted recipe. Agent knowledge and teach signals both reference it,
+ * so a field added here cannot be silently dropped by one of the two paths — Zod strips unknown
+ * keys, which makes a duplicated shape a quiet data-loss bug rather than a validation failure.
+ */
+export const KnownRecipeRecordSchema = z.object({
+  key: z.string().min(1).max(64),
+  label: z.string().max(64),
+  components: z.array(MaterialComponentRecordSchema).max(8),
+  learnedAtTick: nonNegative,
+  learnedFromLineageId: idSchema.optional(),
+});
+
 export const AgentRecordSchema = versioned({
   id: idSchema,
   worldId: idSchema,
@@ -114,16 +127,7 @@ export const AgentRecordSchema = versioned({
   aspiration: z.string().max(200),
   knowledge: z.object({
     knownMaterialIds: z.array(idSchema).max(64),
-    recipes: z
-      .array(
-        z.object({
-          label: z.string().max(64),
-          components: z.array(MaterialComponentRecordSchema).max(8),
-          learnedAtTick: nonNegative,
-          learnedFromLineageId: idSchema.optional(),
-        }),
-      )
-      .max(24),
+    recipes: z.array(KnownRecipeRecordSchema).max(24),
     knownStructureIds: z.array(idSchema).max(48),
   }),
   lastDecisionTick: nonNegative,
@@ -286,13 +290,6 @@ export const GoalRecordSchema = versioned({
 });
 
 export type GoalRecord = z.infer<typeof GoalRecordSchema>;
-
-export const KnownRecipeRecordSchema = z.object({
-  label: z.string().max(64),
-  components: z.array(MaterialComponentRecordSchema).max(8),
-  learnedAtTick: nonNegative,
-  learnedFromLineageId: idSchema.optional(),
-});
 
 export const SignalRecordSchema = versioned({
   worldId: idSchema,

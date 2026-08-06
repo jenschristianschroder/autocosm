@@ -74,17 +74,20 @@ function denseNumbers(source: Readonly<Partial<Record<string, number>>>): Record
 }
 
 function recipeToRecord(recipe: {
+  readonly key: string;
   readonly label: string;
   readonly components: readonly { readonly materialId: string; readonly quantity: number }[];
   readonly learnedAtTick: number;
   readonly learnedFromLineageId?: string;
 }): {
+  key: string;
   label: string;
   components: { materialId: string; quantity: number }[];
   learnedAtTick: number;
   learnedFromLineageId?: string;
 } {
   return {
+    key: recipe.key,
     label: recipe.label,
     components: recipe.components.map((c) => ({ materialId: c.materialId, quantity: c.quantity })),
     learnedAtTick: recipe.learnedAtTick,
