@@ -205,7 +205,7 @@ function actionFor(type: string): Record<string, unknown> {
     case 'collect':
       return { type, resourceNodeId: 'r-1', quantity: 1 };
     case 'combine':
-      return { type, components: [{ materialId: 'm-1', quantity: 1 }], label: 'thing' };
+      return { type, components: [{ materialId: 'm-1', quantity: 1 }] };
     case 'build':
       return { type, pattern: 'shell', components: [{ materialId: 'm-1', quantity: 1 }] };
     case 'inspect':

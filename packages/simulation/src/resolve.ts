@@ -509,18 +509,12 @@ function applyCombine(
   const cost = Math.max(1, Math.trunc(volume / 4));
   if (organism.energy < cost) return reject('insufficientEnergy');
 
-  // The derived material's properties are a volume-weighted blend. The label is decoration.
+  // The derived material's properties are a volume-weighted blend, and its name is derived from
+  // those properties rather than supplied by the agent.
   const derivedId = deriveMaterialId(components);
   const existing = ctx.draft.materials.get(derivedId);
   const definition =
-    existing ??
-    combineMaterials(
-      derivedId,
-      action.label.slice(0, 48),
-      components,
-      ctx.draft.materials,
-      ctx.draft.world.tick,
-    );
+    existing ?? combineMaterials(derivedId, components, ctx.draft.materials, ctx.draft.world.tick);
   if (!definition) return reject('insufficientMaterial');
 
   ctx.ledger.debit(cost);

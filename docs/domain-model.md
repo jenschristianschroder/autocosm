@@ -141,6 +141,27 @@ There is no recipe list. Any combination is legal; most are useless. `fibre` + `
 something with high adhesion and moderate flexibility, which happens to satisfy the `snare` rule.
 Nobody wrote that down as a recipe; it falls out of the property arithmetic.
 
+### Naming
+
+A composite's name is **derived**, never proposed. `deriveMaterialName` (`domain/naming.ts`) reads
+the finished property vector and origin and produces a label and a one-line description — _"Pliant
+Resinweave"_, _"Very adhesive and flexible organic material. Not edible."_ The noun encodes the
+dominant property, the adjective the runner-up, so the name carries two checkable facts rather than
+flavour text. Word choice is indexed by an avalanche-mixed FNV-1a hash of the material id against a
+static, versioned table, so the same material is called the same thing in every process and on every
+replay. The mixing step matters: composites cluster on a handful of property pairs, so the id hash is
+what actually separates them, and indexing a word list with FNV-1a's weakly-distributed low bits
+produced a world in which only 23% of composite names were distinct.
+
+`combine` therefore takes no label. Agent-supplied names compounded across generations into
+unreadable identifiers (`mx1a2b3c-mxf9e8d7`) and were untrusted text flowing into a display string.
+Because the label is a pure function, the persisted value is a self-healing cache: `MaterialRecord`
+re-derives it on read for anything with `derivedFrom`, so a name can never drift out of step with the
+thing it names. Primordial materials keep their hand-authored names.
+
+Labels are decoration and are never matched on — recipes are content-addressed by
+`deriveRecipeKey(components)`, which is what makes it safe to rename every material in the world.
+
 ---
 
 ## 5. Structures

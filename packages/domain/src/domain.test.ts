@@ -33,6 +33,7 @@ import {
   dayPhasePerMille,
   decayPerTick,
   derivePhenotype,
+  deriveMaterialName,
   deriveStructureFunctions,
   deriveVisual,
   describeStructure,
@@ -664,19 +665,15 @@ describe('materials', () => {
       { materialId: asMaterialId('sand'), quantity: 60 },
       { materialId: asMaterialId('resin'), quantity: 40 },
     ];
-    const composite = combineMaterials(
-      asMaterialId('sandResin'),
-      'Sand resin',
-      components,
-      catalogue,
-      12,
-    );
+    const composite = combineMaterials(asMaterialId('sandResin'), components, catalogue, 12);
     expect(composite).not.toBeNull();
     if (!composite) return;
 
     expect(composite.origin).toBe('composite');
     expect(composite.derivedFrom).toHaveLength(2);
     expect(composite.discoveredAtTick).toBe(12);
+    // The name is derived from the finished material, never supplied by the caller.
+    expect(composite.label).toBe(deriveMaterialName(composite).label);
 
     // Binding fills voids and stiffens; nutrition is at most the mean, never more.
     const blended = blendProperties(components, catalogue);
@@ -695,13 +692,12 @@ describe('materials', () => {
 
     // A single ingredient is not a combination, and an unknown ingredient is not usable.
     expect(
-      combineMaterials(asMaterialId('x'), 'X', [components[0] as MaterialComponent], catalogue, 1),
+      combineMaterials(asMaterialId('x'), [components[0] as MaterialComponent], catalogue, 1),
     ).toBeNull();
-    expect(combineMaterials(asMaterialId('x'), 'X', [], catalogue, 1)).toBeNull();
+    expect(combineMaterials(asMaterialId('x'), [], catalogue, 1)).toBeNull();
     expect(
       combineMaterials(
         asMaterialId('x'),
-        'X',
         [
           { materialId: asMaterialId('sand'), quantity: 10 },
           { materialId: asMaterialId('nothingReal'), quantity: 10 },

@@ -119,7 +119,6 @@ export function decideHeuristically(observation: Observation, seed: number): Age
       if (a && b && rng.chance(clampPerMille(drives.build))) {
         return {
           type: 'combine',
-          label: `${a.materialId}-${b.materialId}`.slice(0, 48),
           components: [
             { materialId: a.materialId, quantity: Math.max(1, Math.trunc(a.quantity / 2)) },
             { materialId: b.materialId, quantity: Math.max(1, Math.trunc(b.quantity / 2)) },

@@ -87,7 +87,6 @@ export const CollectActionSchema = z.object({
 
 export const CombineActionSchema = z.object({
   type: z.literal('combine'),
-  label: z.string().min(1).max(48),
   components: z.array(componentSchema).min(2).max(MAX_ACTION_COMPONENTS),
 });
 

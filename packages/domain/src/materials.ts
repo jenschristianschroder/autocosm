@@ -1,4 +1,5 @@
 import { type MaterialId, asMaterialId } from './ids.js';
+import { deriveMaterialName } from './naming.js';
 import { type Mu, type PerMille, clampPerMille, toInt } from './units.js';
 
 /**
@@ -265,10 +266,13 @@ export function totalVolume(components: readonly MaterialComponent[]): Mu {
  * Combination is lossy and non-magical: the composite inherits the blended property vector
  * with a small structural bonus to hardness and adhesion (particles bind) and a penalty to
  * porosity (voids are filled). Nutrition is the volume-weighted mean, never more.
+ *
+ * The label is derived from the finished properties rather than supplied by the caller. A name is
+ * a consequence of what the material turned out to be, so an agent cannot call its creation
+ * anything it likes, and a name can never drift out of step with the thing it names.
  */
 export function combineMaterials(
   id: MaterialId,
-  label: string,
   components: readonly MaterialComponent[],
   catalogue: ReadonlyMap<MaterialId, MaterialDefinition>,
   discoveredAtTick: number,
@@ -283,22 +287,25 @@ export function combineMaterials(
     nutrition += definition.nutritionPerUnit * Math.max(0, toInt(component.quantity));
   }
   const bindingBonus = Math.trunc(blended.adhesion / 8);
+  const origin = 'composite' as const;
+  const nutritionPerUnit = Math.trunc(nutrition / volume / 2);
+  const properties = props({
+    hardness: blended.hardness + bindingBonus,
+    flexibility: blended.flexibility - Math.trunc(bindingBonus / 2),
+    adhesion: blended.adhesion,
+    conductivity: blended.conductivity,
+    toxicity: blended.toxicity,
+    photosensitivity: blended.photosensitivity,
+    porosity: Math.max(0, blended.porosity - Math.trunc(blended.adhesion / 4)),
+    density: blended.density,
+  });
   return Object.freeze({
     id,
-    label,
-    origin: 'composite' as const,
-    nutritionPerUnit: Math.trunc(nutrition / volume / 2),
+    label: deriveMaterialName({ id, origin, properties, nutritionPerUnit }).label,
+    origin,
+    nutritionPerUnit,
     discoveredAtTick,
     derivedFrom: Object.freeze([...components]),
-    properties: props({
-      hardness: blended.hardness + bindingBonus,
-      flexibility: blended.flexibility - Math.trunc(bindingBonus / 2),
-      adhesion: blended.adhesion,
-      conductivity: blended.conductivity,
-      toxicity: blended.toxicity,
-      photosensitivity: blended.photosensitivity,
-      porosity: Math.max(0, blended.porosity - Math.trunc(blended.adhesion / 4)),
-      density: blended.density,
-    }),
+    properties,
   });
 }

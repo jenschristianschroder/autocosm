@@ -2,6 +2,7 @@ import { z } from 'zod';
 import { DRIVE_IDS, HABITAT_PREFERENCES, SIGNAL_CHANNELS } from './entities.js';
 import { asMaterialId } from './ids.js';
 import { deriveRecipeKey, MATERIAL_PROPERTY_IDS } from './materials.js';
+import { deriveMaterialName } from './naming.js';
 import { STRUCTURE_FUNCTIONS, STRUCTURE_PATTERNS } from './structures.js';
 import { TRAIT_IDS } from './traits.js';
 import { WORLD_SPAN_CU } from './geometry.js';
@@ -216,6 +217,14 @@ export const LineageNodeRecordSchema = versioned({
 
 export type LineageNodeRecord = z.infer<typeof LineageNodeRecordSchema>;
 
+/**
+ * A material as persisted.
+ *
+ * `label` is a derived display value, not identity — nothing is ever matched on it. Composites
+ * (those with `derivedFrom`) therefore have their label re-derived on read rather than trusted,
+ * which heals names written before naming became deterministic and keeps the stored value a cache
+ * rather than a source of truth. Primordial materials keep their hand-authored names.
+ */
 export const MaterialRecordSchema = versioned({
   id: idSchema,
   worldId: idSchema,
@@ -225,7 +234,19 @@ export const MaterialRecordSchema = versioned({
   nutritionPerUnit: z.number().int().min(0).max(1000),
   derivedFrom: z.array(MaterialComponentRecordSchema).max(8).optional(),
   discoveredAtTick: nonNegative.optional(),
-});
+}).transform((material) =>
+  material.derivedFrom === undefined
+    ? material
+    : {
+        ...material,
+        label: deriveMaterialName({
+          id: asMaterialId(material.id),
+          origin: material.origin,
+          properties: material.properties,
+          nutritionPerUnit: material.nutritionPerUnit,
+        }).label,
+      },
+);
 
 export type MaterialRecord = z.infer<typeof MaterialRecordSchema>;
 

@@ -12,6 +12,7 @@ export * from './time.js';
 export * from './geometry.js';
 export * from './terrain.js';
 export * from './traits.js';
+export * from './naming.js';
 export * from './materials.js';
 export * from './structures.js';
 export * from './entities.js';
