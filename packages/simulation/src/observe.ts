@@ -72,6 +72,7 @@ export function observe(draft: WorldState, organism: Organism, phenotype?: Pheno
     ageTicks: organism.ageTicks,
     maxAgeTicks: p.maxAgeTicks,
     mature: organism.ageTicks >= p.maturityAgeTicks,
+    reproductionReady: draft.world.tick >= organism.reproductionReadyTick,
     generation: organism.generation,
     inventory: organism.inventory.map((e) => ({ materialId: e.materialId, quantity: e.quantity })),
     ...(organism.attachedStructureId === undefined
@@ -81,6 +82,7 @@ export function observe(draft: WorldState, organism: Organism, phenotype?: Pheno
     manipulation: p.manipulationScore,
     memorySlots: p.memorySlots,
     speedCuPerTick: p.speedCuPerTick,
+    moveCostPer100Cu: p.moveCostPer100Cu,
     perceptionRadiusCu: radius,
   };
 
@@ -113,6 +115,7 @@ export function observe(draft: WorldState, organism: Organism, phenotype?: Pheno
       sizeBand: sizeBand(otherPhenotype.mass),
       threatBand: threatBand(otherPhenotype.attackPower, p.defence),
       healthBand: healthBand(other.health, otherPhenotype.maxHealth),
+      energyBand: energyBand(other.energy, otherPhenotype.maxEnergy),
     });
   }
   organisms.sort((a, b) => a.distanceCu - b.distanceCu || (a.organismId < b.organismId ? -1 : 1));
@@ -248,6 +251,20 @@ function healthBand(health: number, maxHealth: number): ObservedOrganism['health
   if (ratio < 350) return 'weak';
   if (ratio < 750) return 'fair';
   return 'strong';
+}
+
+/**
+ * Coarse hunger.
+ *
+ * `lean` deliberately reaches to 750‰ so that anything below `fed` still has room to
+ * accept a transfer — `applyShare` refuses when the recipient's reserve is already full,
+ * and an observable that cannot distinguish that case makes cooperation unimplementable.
+ */
+function energyBand(energy: number, maxEnergy: number): ObservedOrganism['energyBand'] {
+  const ratio = maxEnergy <= 0 ? 0 : Math.trunc((energy * 1000) / maxEnergy);
+  if (ratio < 300) return 'starving';
+  if (ratio < 750) return 'lean';
+  return 'fed';
 }
 
 /** True when the observer may act on the structure at all. */

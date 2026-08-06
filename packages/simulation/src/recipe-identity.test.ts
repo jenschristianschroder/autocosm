@@ -50,22 +50,47 @@ const TEACH_INTENSITY = 600;
 /**
  * A living organism that knows a recipe, has evolved a usable signal, and can afford to emit one.
  *
- * The energy floor matters: `applySignal` checks affordability *before* it looks the recipe up, so a
- * teacher picked without it can reject with `insufficientEnergy` and quietly stop these tests
- * exercising recipe identity at all. Which organism is first in id order depends on the whole
- * simulation's trajectory, so the floor is what keeps the fixture pinned to its subject.
+ * Nothing guarantees the world hands one over. Recipes are discovered by whichever lineage happens
+ * to combine two materials first, and that lineage can be extinct by any given tick — at seed
+ * 4242424 / tick 500 every one of the 56 survivors belongs to an agent that has never learned a
+ * recipe. Searching for a naturally-occurring teacher therefore pins these tests to the whole
+ * simulation's trajectory, which any behaviour change perturbs, and they have broken that way twice.
+ *
+ * So the subject is *constructed*: a living, signal-capable organism is chosen, and its agent is
+ * granted a recipe that the world genuinely discovered, plus the energy to emit it. Both are
+ * transient state, not evolved capability — the organism must still have evolved a signal on its
+ * own, because `availableActions` gates the action and no fixture may forge that. The recipe stays
+ * content-addressed by `deriveRecipeKey`, which is the property under test.
  */
-function findTeacher(state: WorldState): { organismId: string; recipeKey: string } {
+function findTeacher(state: WorldState): {
+  state: WorldState;
+  organismId: string;
+  recipeKey: string;
+} {
   const signalCost = Math.max(1, scaleByPerMille(6, TEACH_INTENSITY));
+
+  const discovered = [...state.agents.values()].flatMap((a) => a.knowledge.recipes)[0];
+  if (!discovered) throw new Error('the world discovered no recipe to teach');
+
   for (const id of sortedIds(state.organisms)) {
     const organism = state.organisms.get(id);
     if (!organism?.alive) continue;
-    if (organism.energy < signalCost) continue;
     if (derivePhenotype(organism.genotype).signalRadiusCu <= 0) continue;
-    const recipe = state.agents.get(organism.agentId)?.knowledge.recipes[0];
-    if (recipe) return { organismId: id, recipeKey: recipe.key };
+    const agent = state.agents.get(organism.agentId);
+    if (!agent) continue;
+
+    const recipe = agent.knowledge.recipes[0] ?? discovered;
+    const agents = new Map(state.agents);
+    agents.set(agent.id, {
+      ...agent,
+      knowledge: { ...agent.knowledge, recipes: [recipe, ...agent.knowledge.recipes.slice(1)] },
+    });
+    const organisms = new Map(state.organisms);
+    organisms.set(id, { ...organism, energy: Math.max(organism.energy, signalCost * 4) });
+
+    return { state: { ...state, agents, organisms }, organismId: id, recipeKey: recipe.key };
   }
-  throw new Error('no organism with an evolved signal knows a recipe');
+  throw new Error('no living organism has evolved a signal');
 }
 
 /**
@@ -81,23 +106,23 @@ function stageTeaching(state: WorldState): {
   recipe: KnownRecipe;
   listenerId: string;
 } {
-  const { organismId } = findTeacher(state);
-  const teacher = state.organisms.get(organismId);
+  const { state: staged, organismId } = findTeacher(state);
+  const teacher = staged.organisms.get(organismId);
   if (!teacher) throw new Error('teacher vanished');
-  const recipe = state.agents.get(teacher.agentId)?.knowledge.recipes[0];
+  const recipe = staged.agents.get(teacher.agentId)?.knowledge.recipes[0];
   if (!recipe) throw new Error('teacher knows no recipe');
 
   // The healthiest non-kin organism, so metabolism cannot kill it before the propagation sweep.
   let listener: Organism | undefined;
-  for (const id of sortedIds(state.organisms)) {
-    const candidate = state.organisms.get(id);
+  for (const id of sortedIds(staged.organisms)) {
+    const candidate = staged.organisms.get(id);
     if (!candidate?.alive || candidate.agentId === teacher.agentId) continue;
     if (derivePhenotype(candidate.genotype).memorySlots < 1) continue;
     if (!listener || candidate.energy > listener.energy) listener = candidate;
   }
   if (!listener) throw new Error('no non-kin organism can hold a memory');
 
-  const organisms = new Map(state.organisms);
+  const organisms = new Map(staged.organisms);
   organisms.set(listener.id, { ...listener, position: teacher.position });
 
   // Propagation reads the listener's position *after* the tick's actions resolve, so a radius of
@@ -125,7 +150,7 @@ function stageTeaching(state: WorldState): {
   };
 
   return {
-    state: { ...state, organisms, signals: [signal] },
+    state: { ...staged, organisms, signals: [signal] },
     recipe,
     listenerId: listener.id,
   };
@@ -200,8 +225,8 @@ describe('recipe identity', () => {
   });
 
   it('teaches by key even after every label has been rewritten', () => {
-    const { organismId, recipeKey } = findTeacher(state);
-    const ctx = context(state);
+    const { state: staged, organismId, recipeKey } = findTeacher(state);
+    const ctx = context(staged);
     for (const [agentId, agent] of ctx.draft.agents) {
       ctx.draft.agents.set(agentId, {
         ...agent,
@@ -229,8 +254,8 @@ describe('recipe identity', () => {
   });
 
   it('rejects a teach signal naming a recipe the agent does not know', () => {
-    const { organismId } = findTeacher(state);
-    const result = resolveAction(context(state), organismId, {
+    const { state: staged, organismId } = findTeacher(state);
+    const result = resolveAction(context(staged), organismId, {
       type: 'signal',
       channel: 'teach',
       intensity: 600,

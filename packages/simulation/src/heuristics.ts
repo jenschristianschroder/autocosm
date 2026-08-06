@@ -64,9 +64,22 @@ export function decideHeuristically(observation: Observation, seed: number): Age
   const healthRatio = self.maxHealth <= 0 ? 0 : Math.trunc((self.health * 1000) / self.maxHealth);
   const drives = observation.drives;
 
+  /**
+   * Can this organism afford the step a move would actually take?
+   *
+   * Mirrors `applyMove`: a step is clamped to `speedCuPerTick`, so a nearby target costs
+   * proportionally less. Without this the organism proposes a walk it cannot pay for and
+   * forfeits the turn — it does not fall through to resting, which is what it needs.
+   */
+  const canReach = (distanceCu: number): boolean => {
+    if (!can.has('move')) return false;
+    const travelled = Math.min(distanceCu, self.speedCuPerTick);
+    return self.energy >= Math.max(1, Math.trunc((travelled * self.moveCostPer100Cu) / 100));
+  };
+
   // 1. Flee an imminent threat. Survival overrides everything else.
   const threat = observation.organisms.find((o) => !o.kin && o.threatBand === 'dangerous');
-  if (threat && healthRatio < 700 && can.has('move')) {
+  if (threat && healthRatio < 700 && canReach(threat.distanceCu * 2)) {
     const away = makePosition(
       self.position.x - (threat.position.x - self.position.x),
       self.position.z - (threat.position.z - self.position.z),
@@ -76,7 +89,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
 
   // 2. Starving. Eat whatever is reachable, otherwise rest to lower the burn rate.
   if (energyRatio < 250) {
-    const feed = nearestFeeding(observation);
+    const feed = nearestFeeding(observation, canReach);
     if (feed) return feed;
     if (observation.environment.biomass > 0) {
       return { type: 'consume', targetKind: 'biomass' };
@@ -109,7 +122,17 @@ export function decideHeuristically(observation: Observation, seed: number): Age
   }
 
   // 5. Reproduce when mature, energetic and motivated.
-  if (can.has('reproduce') && self.mature && energyRatio > 700 && healthRatio > 600) {
+  //
+  //    The refractory check comes first because this branch *returns*: proposing a birth the
+  //    simulation will refuse costs the organism its entire turn, and measurement showed that
+  //    was over half of every rejection in the world.
+  if (
+    can.has('reproduce') &&
+    self.mature &&
+    self.reproductionReady &&
+    energyRatio > 700 &&
+    healthRatio > 600
+  ) {
     if (rng.chance(clampPerMille(drives.reproduce))) {
       return { type: 'reproduce', investment: clampPerMille(400 + drives.reproduce / 4) };
     }
@@ -118,7 +141,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
   // 6. Feed opportunistically. Anything below a comfortable reserve tops up first, so
   //    building and exploring only happen from a position of strength.
   if (energyRatio < 620) {
-    const feed = nearestFeeding(observation);
+    const feed = nearestFeeding(observation, canReach);
     if (feed) return feed;
     if (observation.environment.biomass > 0) {
       return { type: 'consume', targetKind: 'biomass' };
@@ -197,7 +220,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
             ],
           };
         }
-      } else if (can.has('move')) {
+      } else if (canReach(worn.distanceCu)) {
         return { type: 'move', target: worn.position };
       }
     }
@@ -214,17 +237,20 @@ export function decideHeuristically(observation: Observation, seed: number): Age
         if (node.distanceCu <= 420) {
           return { type: 'collect', resourceNodeId: node.resourceNodeId, quantity: 60 };
         }
-        if (can.has('move')) {
+        if (canReach(node.distanceCu)) {
           return { type: 'move', target: node.position };
         }
       }
     }
   }
 
-  // 10. Cooperate: feed a starving kin when comfortable.
+  // 10. Cooperate: feed a hungry kin when comfortable.
+  //
+  //     Judged by hunger, not by injury. `share` moves energy, and a full recipient is
+  //     refused outright, so targeting the wounded spent the turn on a certain rejection.
   if (can.has('share') && energyRatio > 800) {
     const kin = observation.organisms.find(
-      (o) => o.kin && o.healthBand === 'weak' && o.distanceCu <= 420,
+      (o) => o.kin && o.energyBand !== 'fed' && o.distanceCu <= 420,
     );
     if (kin && rng.chance(clampPerMille(drives.cooperate))) {
       return {
@@ -247,7 +273,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
 
   // 12. Top up before wandering, weighted by the forage drive.
   if (energyRatio < 900 && rng.chance(clampPerMille(drives.forage))) {
-    const feed = nearestFeeding(observation);
+    const feed = nearestFeeding(observation, canReach);
     if (feed) return feed;
     if (observation.environment.biomass > 0) {
       return { type: 'consume', targetKind: 'biomass' };
@@ -255,7 +281,11 @@ export function decideHeuristically(observation: Observation, seed: number): Age
   }
 
   // 13. Explore, weighted by drive. Sessile lineages simply rest.
-  if (can.has('move') && self.speedCuPerTick > 40 && rng.chance(clampPerMille(drives.explore))) {
+  if (
+    self.speedCuPerTick > 40 &&
+    canReach(self.speedCuPerTick) &&
+    rng.chance(clampPerMille(drives.explore))
+  ) {
     const jitter = self.speedCuPerTick * 6;
     return {
       type: 'move',
@@ -277,7 +307,10 @@ const BIOMASS_ENERGY_PER_UNIT = 5;
  * unit: a node only wins when it is richer than biomass or biomass has been grazed out.
  * Getting this wrong starves the slow, heavy lineages that must feed well to build.
  */
-function nearestFeeding(observation: Observation): AgentAction | null {
+function nearestFeeding(
+  observation: Observation,
+  canReach: (distanceCu: number) => boolean,
+): AgentAction | null {
   let best: (typeof observation.resources)[number] | undefined;
   for (const r of observation.resources) {
     if (r.nutritionPerUnit <= 0 || r.quantity <= 0) continue;
@@ -299,7 +332,7 @@ function nearestFeeding(observation: Observation): AgentAction | null {
   if (best.distanceCu <= 420) {
     return { type: 'consume', targetKind: 'resourceNode', targetId: best.resourceNodeId };
   }
-  if (observation.availableActions.includes('move')) {
+  if (canReach(best.distanceCu)) {
     return { type: 'move', target: best.position };
   }
   return null;

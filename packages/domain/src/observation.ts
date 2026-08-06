@@ -46,6 +46,14 @@ export interface ObservedSelf {
   readonly ageTicks: number;
   readonly maxAgeTicks: number;
   readonly mature: boolean;
+  /**
+   * Whether the reproductive refractory period has elapsed.
+   *
+   * An organism perceives its own body. Without this it cannot tell a cooldown from a
+   * failure, so every policy — heuristic or model — spends the whole turn proposing a
+   * reproduction the simulation is certain to refuse.
+   */
+  readonly reproductionReady: boolean;
   readonly generation: number;
   readonly inventory: readonly { readonly materialId: MaterialId; readonly quantity: number }[];
   readonly attachedStructureId?: StructureId | undefined;
@@ -54,6 +62,12 @@ export interface ObservedSelf {
   readonly manipulation: PerMille;
   readonly memorySlots: number;
   readonly speedCuPerTick: number;
+  /**
+   * Energy spent per 100 cu travelled. Paired with `speedCuPerTick` this makes the cost of a
+   * step computable, so an organism can tell "too tired to walk" before spending the turn
+   * discovering it.
+   */
+  readonly moveCostPer100Cu: number;
   readonly perceptionRadiusCu: number;
 }
 
@@ -68,6 +82,14 @@ export interface ObservedOrganism {
   readonly sizeBand: 'tiny' | 'small' | 'medium' | 'large';
   readonly threatBand: 'harmless' | 'wary' | 'dangerous';
   readonly healthBand: 'weak' | 'fair' | 'strong';
+  /**
+   * Coarse hunger, which is what `share` actually transfers.
+   *
+   * Health and energy are independent: a well-fed organism can be badly wounded. Judging
+   * hunger by `healthBand` targets the injured, and the simulation then refuses the
+   * transfer because their reserve is already full.
+   */
+  readonly energyBand: 'starving' | 'lean' | 'fed';
 }
 
 export interface ObservedResource {
@@ -220,6 +242,7 @@ const observedSelfSchema = z.object({
   ageTicks: z.number().int().min(0),
   maxAgeTicks: z.number().int().min(0),
   mature: z.boolean(),
+  reproductionReady: z.boolean(),
   generation: z.number().int().min(0),
   inventory: z
     .array(z.object({ materialId: brandedId<'MaterialId'>(), quantity: z.number().finite() }))
@@ -229,6 +252,7 @@ const observedSelfSchema = z.object({
   manipulation: perMille,
   memorySlots: z.number().int().min(0).max(64),
   speedCuPerTick: z.number().finite(),
+  moveCostPer100Cu: z.number().finite(),
   perceptionRadiusCu: z.number().finite(),
 });
 
@@ -257,6 +281,7 @@ export const ObservationSchema = z.object({
         sizeBand: z.enum(['tiny', 'small', 'medium', 'large']),
         threatBand: z.enum(['harmless', 'wary', 'dangerous']),
         healthBand: z.enum(['weak', 'fair', 'strong']),
+        energyBand: z.enum(['starving', 'lean', 'fed']),
       }),
     )
     .max(MAX_OBSERVED_ORGANISMS),
