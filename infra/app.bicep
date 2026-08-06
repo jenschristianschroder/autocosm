@@ -101,9 +101,6 @@ param adminAuthClientId string = ''
 @description('Entra tenant that issues admin sign-in tokens. Defaults to the deployment tenant.')
 param adminAuthTenantId string = tenant().tenantId
 
-@description('Client secret of the admin sign-in app registration. Required only when adminExternalIngress is true; stored as a Container App secret and never emitted as an output.')
-@secure()
-param adminAuthClientSecret string = ''
 
 @description('New lineages one anonymous creator may author per day.')
 @minValue(1)
@@ -336,15 +333,6 @@ resource admin 'Microsoft.App/containerApps@2024-03-01' = {
           identity: adminIdentity.id
         }
       ]
-      // The Entra sign-in client secret exists only when the inspector is exposed externally.
-      secrets: adminExternalIngress
-        ? [
-            {
-              name: 'admin-auth-client-secret'
-              value: adminAuthClientSecret
-            }
-          ]
-        : []
       maxInactiveRevisions: 2
     }
     template: {
@@ -411,9 +399,11 @@ resource admin 'Microsoft.App/containerApps@2024-03-01' = {
 
 // Entra sign-in for the admin inspector, enabled only when it is exposed externally. The platform
 // intercepts every request and redirects an unauthenticated caller to Microsoft Entra, so the
-// inspector never serves a byte to an anonymous internet client. No secret is stored unless this is
-// switched on. Restrict who may sign in by requiring assignment on the app registration and
-// assigning only the intended user(s).
+// inspector never serves a byte to an anonymous internet client. No client secret is stored: with
+// no secret configured, Easy Auth uses the OpenID Connect implicit flow and validates the returned
+// ID token, which is all that is needed to gate the page (the inspector calls no downstream API on
+// the user's behalf). Requires ID-token issuance enabled on the app registration. Restrict who may
+// sign in by requiring assignment on the app registration and assigning only the intended user(s).
 resource adminAuth 'Microsoft.App/containerApps/authConfigs@2024-03-01' = if (adminExternalIngress) {
   parent: admin
   name: 'current'
@@ -431,7 +421,6 @@ resource adminAuth 'Microsoft.App/containerApps/authConfigs@2024-03-01' = if (ad
         registration: {
           openIdIssuer: '${az.environment().authentication.loginEndpoint}${adminAuthTenantId}/v2.0'
           clientId: adminAuthClientId
-          clientSecretSettingName: 'admin-auth-client-secret'
         }
         validation: {
           allowedAudiences: [

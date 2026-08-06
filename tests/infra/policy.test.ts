@@ -649,8 +649,6 @@ describe('no secret is accepted or emitted', () => {
         .filter(([, spec]) => String(spec['type']).toLowerCase().startsWith('secure'))
         .map(([name]) => name);
     expect(secure(foundationTemplate)).toEqual([]);
-    expect(new Set(secure(appTemplate))).toEqual(
-      new Set(['creatorSigningKey', 'adminAuthClientSecret']),
-    );
+    expect(secure(appTemplate)).toEqual(['creatorSigningKey']);
   });
 });

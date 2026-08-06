@@ -176,6 +176,8 @@ jobs:
               azureOpenAiEndpoint="${{ vars.AZURE_OPENAI_ENDPOINT }}" \
               azureOpenAiDeployment="${{ vars.AZURE_OPENAI_DEPLOYMENT }}" \
               logModelIo="${{ vars.AUTOCOSM_LOG_OPENAI_IO || 'false' }}" \
+              adminExternalIngress="${{ vars.AUTOCOSM_ADMIN_EXTERNAL || 'false' }}" \
+              adminAuthClientId="${{ vars.AZURE_ADMIN_AUTH_CLIENT_ID }}" \
             --query properties.outputs -o json > app-outputs.json
           echo "fqdn=$(jq -r '.webFqdn.value' app-outputs.json)" >> "$GITHUB_OUTPUT"
 
