@@ -90,6 +90,7 @@ export const INSPECTOR_JS = String.raw`(() => {
   const content = document.getElementById('content');
   let current = null;
   let continuation = null;
+  let authConfig = null;
 
   const el = (tag, props, ...kids) => {
     const node = document.createElement(tag);
@@ -106,6 +107,110 @@ export const INSPECTOR_JS = String.raw`(() => {
     const b = el('div', { class: 'banner', text: message });
     content.prepend(b);
   };
+
+  // --- Sign-in for the toggle (authorization-code + PKCE) --------------------------------------
+  // Reads ride on the platform's Entra sign-in cookie. The one write is a POST, which that cookie
+  // flow refuses as a cross-site-forgery risk; so when the page is external (authConfig present)
+  // the page authenticates the POST a second way the platform accepts — a bearer ID token for the
+  // same app registration, obtained here as a public client with no secret (PKCE). Cached for its
+  // lifetime so the popup appears at most once per session.
+  const TOKEN_KEY = 'ac.idtoken';
+  const PKCE_KEY = 'ac.pkce';
+  const b64url = (bytes) =>
+    btoa(String.fromCharCode.apply(null, new Uint8Array(bytes)))
+      .replace(/\+/g, '-')
+      .replace(/\//g, '_')
+      .replace(/=+$/, '');
+  const randomString = (len) => {
+    const a = new Uint8Array(len);
+    crypto.getRandomValues(a);
+    return b64url(a).slice(0, len);
+  };
+  const sha256 = (text) => crypto.subtle.digest('SHA-256', new TextEncoder().encode(text));
+
+  function cachedToken() {
+    try {
+      const raw = sessionStorage.getItem(TOKEN_KEY);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (typeof parsed.exp === 'number' && parsed.exp * 1000 > Date.now() + 60000) return parsed.token;
+    } catch (e) { /* ignore */ }
+    return null;
+  }
+  function cacheToken(token) {
+    let exp = 0;
+    try {
+      exp = JSON.parse(atob(token.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))).exp || 0;
+    } catch (e) { /* ignore */ }
+    sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ token: token, exp: exp }));
+  }
+
+  function waitForAuthMessage() {
+    return new Promise((resolve, reject) => {
+      const onMessage = (ev) => {
+        if (ev.origin !== location.origin || !ev.data || ev.data.source !== 'autocosm-auth') return;
+        clearTimeout(timer);
+        window.removeEventListener('message', onMessage);
+        resolve(ev.data);
+      };
+      const timer = setTimeout(() => {
+        window.removeEventListener('message', onMessage);
+        reject(new Error('sign-in timed out'));
+      }, 120000);
+      window.addEventListener('message', onMessage);
+    });
+  }
+
+  async function acquireToken() {
+    const cached = cachedToken();
+    if (cached) return cached;
+    const cfg = authConfig;
+    const authority = 'https://login.microsoftonline.com/' + encodeURIComponent(cfg.tenantId);
+    const redirectUri = location.origin + '/auth/callback';
+    const verifier = randomString(64);
+    const challenge = b64url(await sha256(verifier));
+    const state = randomString(24);
+    const nonce = randomString(24);
+    sessionStorage.setItem(PKCE_KEY, JSON.stringify({ verifier: verifier, state: state }));
+    const authorize = new URL(authority + '/oauth2/v2.0/authorize');
+    authorize.search = new URLSearchParams({
+      client_id: cfg.clientId,
+      response_type: 'code',
+      redirect_uri: redirectUri,
+      response_mode: 'query',
+      scope: 'openid',
+      code_challenge: challenge,
+      code_challenge_method: 'S256',
+      state: state,
+      nonce: nonce,
+    }).toString();
+    const popup = window.open(authorize.toString(), 'autocosm-signin', 'width=520,height=680');
+    if (!popup) throw new Error('sign-in popup was blocked');
+    const result = await waitForAuthMessage();
+    let saved = {};
+    try { saved = JSON.parse(sessionStorage.getItem(PKCE_KEY) || '{}'); } catch (e) { /* ignore */ }
+    sessionStorage.removeItem(PKCE_KEY);
+    if (result.error) throw new Error(result.errorDescription || result.error);
+    if (!result.code || !result.state || result.state !== saved.state) {
+      throw new Error('sign-in verification failed');
+    }
+    const res = await fetch(authority + '/oauth2/v2.0/token', {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        client_id: cfg.clientId,
+        grant_type: 'authorization_code',
+        code: result.code,
+        redirect_uri: redirectUri,
+        code_verifier: saved.verifier,
+        scope: 'openid',
+      }).toString(),
+    });
+    const body = await res.json().catch(() => null);
+    if (!res.ok || !body || !body.id_token) throw new Error('could not complete sign-in');
+    cacheToken(body.id_token);
+    return body.id_token;
+  }
 
   async function getJson(url) {
     const res = await fetch(url, { headers: { accept: 'application/json' } });
@@ -182,6 +287,8 @@ export const INSPECTOR_JS = String.raw`(() => {
   }
 
   async function initControls() {
+    const cfg = await getJson('/api/auth-config').catch(() => null);
+    authConfig = cfg && cfg.clientId && cfg.tenantId ? cfg : null;
     const me = await getJson('/api/me').catch(() => null);
     if (me && me.user) document.getElementById('user').textContent = me.user;
     const io = document.getElementById('io');
@@ -199,9 +306,11 @@ export const INSPECTOR_JS = String.raw`(() => {
       io.disabled = true;
       ioStatus.textContent = 'saving…';
       try {
+        const headers = { 'content-type': 'application/json' };
+        if (authConfig) headers.authorization = 'Bearer ' + (await acquireToken());
         const res = await fetch('/api/settings/openai-logging', {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: headers,
           body: JSON.stringify({ enabled: io.checked }),
         });
         if (!res.ok) throw new Error('HTTP ' + res.status);
@@ -220,4 +329,31 @@ export const INSPECTOR_JS = String.raw`(() => {
 
   init();
   initControls().catch(() => {});
+})();`;
+
+/**
+ * The sign-in popup's landing page. Microsoft Entra redirects the popup here with an authorization
+ * code; the page hands that code back to the window that opened it and closes. Its script is served
+ * separately (`/auth-callback.js`) so the Content-Security-Policy needs no inline-script exception.
+ */
+export const AUTH_CALLBACK_HTML = `<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8" /><meta name="robots" content="noindex, nofollow" /><title>Signing in…</title></head>
+<body><script src="/auth-callback.js"></script></body>
+</html>`;
+
+export const AUTH_CALLBACK_JS = String.raw`(() => {
+  'use strict';
+  const p = new URLSearchParams(location.search);
+  const message = {
+    source: 'autocosm-auth',
+    code: p.get('code'),
+    state: p.get('state'),
+    error: p.get('error'),
+    errorDescription: p.get('error_description'),
+  };
+  try {
+    if (window.opener) window.opener.postMessage(message, location.origin);
+  } catch (e) { /* ignore */ }
+  window.close();
 })();`;

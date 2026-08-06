@@ -5,7 +5,7 @@ import { z, ZodError } from 'zod';
 import type { Logger } from '@autocosm/observability';
 import { UnknownTable, type RawTableReader, type SettingsStore } from '@autocosm/storage';
 import type { AdminConfig } from './config.js';
-import { INDEX_HTML, INSPECTOR_JS } from './ui.js';
+import { AUTH_CALLBACK_HTML, AUTH_CALLBACK_JS, INDEX_HTML, INSPECTOR_JS } from './ui.js';
 
 /**
  * The admin inspector's HTTP surface.
@@ -81,7 +81,9 @@ export async function buildAdminServer(deps: AdminServerDependencies): Promise<F
         scriptSrc: ["'self'"],
         styleSrc: ["'self'", "'unsafe-inline'"],
         imgSrc: ["'self'", 'data:'],
-        connectSrc: ["'self'"],
+        // The Entra token endpoint is reached only to exchange a sign-in authorization code for an
+        // ID token (external deployment). Everything else stays same-origin.
+        connectSrc: ["'self'", 'https://login.microsoftonline.com'],
         objectSrc: ["'none'"],
         frameAncestors: ["'none'"],
         baseUri: ["'self'"],
@@ -182,6 +184,34 @@ export async function buildAdminServer(deps: AdminServerDependencies): Promise<F
     const principal = req.headers['x-ms-client-principal-name'];
     const user = Array.isArray(principal) ? principal[0] : principal;
     await reply.send({ user: typeof user === 'string' && user.length > 0 ? user : null });
+  });
+
+  // Public sign-in parameters for the browser. These are non-secret app-registration identifiers.
+  // The object is empty when the inspector runs internally (no Easy Auth layer), which is the
+  // page's signal to post its toggle directly rather than attaching a bearer token.
+  app.get('/api/auth-config', async (_req, reply) => {
+    const { clientId, tenantId } = config.auth;
+    await reply
+      .header('cache-control', 'no-store')
+      .send(clientId !== undefined && tenantId !== undefined ? { clientId, tenantId } : {});
+  });
+
+  // The sign-in popup lands here after Microsoft Entra returns an authorization code. The page's
+  // only job is to hand the code back to the opener window and close; the PKCE token exchange runs
+  // in the main window. Served with its script on a separate route so the CSP keeps script-src
+  // 'self' with no inline-script exception.
+  app.get('/auth/callback', async (_req, reply) => {
+    await reply
+      .header('content-type', 'text/html; charset=utf-8')
+      .header('cache-control', 'no-store')
+      .send(AUTH_CALLBACK_HTML);
+  });
+
+  app.get('/auth-callback.js', async (_req, reply) => {
+    await reply
+      .header('content-type', 'application/javascript; charset=utf-8')
+      .header('cache-control', 'no-store')
+      .send(AUTH_CALLBACK_JS);
   });
 
   app.get('/app.js', async (_req, reply) => {

@@ -353,6 +353,10 @@ resource admin 'Microsoft.App/containerApps@2024-03-01' = {
             { name: 'AUTOCOSM_LOG_LEVEL', value: 'info' }
             { name: 'AZURE_TABLE_ENDPOINT', value: tableEndpoint }
             { name: 'AZURE_CLIENT_ID', value: adminIdentity.properties.clientId }
+            // Non-secret sign-in identifiers the page uses to obtain a bearer ID token for its one
+            // write when external. Empty client ID (internal ingress) leaves client-side sign-in off.
+            { name: 'AUTOCOSM_ADMIN_AUTH_CLIENT_ID', value: adminAuthClientId }
+            { name: 'AZURE_TENANT_ID', value: adminAuthTenantId }
           ]
           probes: [
             {

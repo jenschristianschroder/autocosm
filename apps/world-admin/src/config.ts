@@ -24,6 +24,20 @@ export const AdminConfigSchema = z.object({
   storage: StorageConfigSchema,
   /** Rows shown per table page. Bounded so one request can never pull an unbounded scan. */
   pageSize: z.coerce.number().int().min(1).max(200).default(50),
+  /**
+   * Browser sign-in parameters, present only for the external (Entra-fronted) deployment. These
+   * are public identifiers, not secrets — the same app-registration client ID the platform's Easy
+   * Auth layer validates. The server hands them to the page so it can obtain an ID token and
+   * present it as a bearer token on its single write; Easy Auth's cookie flow forbids that POST as
+   * a cross-site-forgery risk, whereas a bearer token is accepted. Absent for the internal
+   * deployment, where there is no Easy Auth layer and the toggle posts directly.
+   */
+  auth: z
+    .object({
+      clientId: z.string().min(1).max(128).optional(),
+      tenantId: z.string().min(1).max(128).optional(),
+    })
+    .default({}),
 });
 
 export type AdminConfig = z.infer<typeof AdminConfigSchema>;
@@ -63,6 +77,10 @@ export function loadAdminConfig(rawEnv: NodeJS.ProcessEnv = processEnvironment):
       isProduction,
     },
     pageSize: env['AUTOCOSM_ADMIN_PAGE_SIZE'] ?? 50,
+    auth: {
+      clientId: env['AUTOCOSM_ADMIN_AUTH_CLIENT_ID'],
+      tenantId: env['AZURE_TENANT_ID'],
+    },
   });
 
   if (!parsed.success) {

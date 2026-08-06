@@ -53,9 +53,23 @@ function buildConfig() {
   });
 }
 
-async function makeApp(reader: RawTableReader, settings: SettingsStore = new FakeSettings()) {
+function buildConfigWithAuth() {
+  return loadAdminConfig({
+    NODE_ENV: 'test',
+    AUTOCOSM_STORAGE_DRIVER: 'azureTables',
+    AZURE_TABLE_ENDPOINT: 'https://example.table.core.windows.net/',
+    AUTOCOSM_ADMIN_AUTH_CLIENT_ID: '3be836a8-3b6c-4744-9079-5791ac3bbc3c',
+    AZURE_TENANT_ID: '7af8f68a-896b-44d5-994a-1c9bf336f8d7',
+  });
+}
+
+async function makeApp(
+  reader: RawTableReader,
+  settings: SettingsStore = new FakeSettings(),
+  config = buildConfig(),
+) {
   return buildAdminServer({
-    config: buildConfig(),
+    config,
     reader,
     settings,
     logger: new Logger({ level: 'error', context: { mode: 'admin' } }),
@@ -136,6 +150,41 @@ describe('admin inspector server', () => {
     const csp = res.headers['content-security-policy'];
     expect(csp).toContain("script-src 'self'");
     expect(csp).not.toContain("script-src 'self' 'unsafe-inline'");
+    // The token endpoint is the only cross-origin connection the page may open.
+    expect(csp).toContain("connect-src 'self' https://login.microsoftonline.com");
+    await app.close();
+  });
+
+  it('serves an empty auth-config when no external sign-in is configured', async () => {
+    const app = await makeApp(new FakeReader());
+    const res = await app.inject({ method: 'GET', url: '/api/auth-config' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({});
+    await app.close();
+  });
+
+  it('serves the sign-in client and tenant when configured for external access', async () => {
+    const app = await makeApp(new FakeReader(), new FakeSettings(), buildConfigWithAuth());
+    const res = await app.inject({ method: 'GET', url: '/api/auth-config' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toEqual({
+      clientId: '3be836a8-3b6c-4744-9079-5791ac3bbc3c',
+      tenantId: '7af8f68a-896b-44d5-994a-1c9bf336f8d7',
+    });
+    await app.close();
+  });
+
+  it('serves the sign-in popup callback page and its script from separate routes', async () => {
+    const app = await makeApp(new FakeReader());
+    const page = await app.inject({ method: 'GET', url: '/auth/callback' });
+    expect(page.statusCode).toBe(200);
+    expect(page.headers['content-type']).toContain('text/html');
+    expect(page.body).toContain('/auth-callback.js');
+
+    const script = await app.inject({ method: 'GET', url: '/auth-callback.js' });
+    expect(script.statusCode).toBe(200);
+    expect(script.headers['content-type']).toContain('javascript');
+    expect(script.body).toContain('postMessage');
     await app.close();
   });
 
