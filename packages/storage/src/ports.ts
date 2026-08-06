@@ -175,6 +175,13 @@ export interface EventQuery extends PageRequest {
   readonly worldId: string;
   readonly regionId?: string;
   readonly sinceTick?: number;
+  /**
+   * Inclusive upper bound, and where a newest-first walk starts.
+   *
+   * An append-only log has no seekable end in Table Storage, so a caller that wants the present
+   * must say where the present is. Omitting it makes the store discover the latest tick itself,
+   * which costs an extra read.
+   */
   readonly untilTick?: number;
   readonly lineageId?: string;
 }
@@ -187,6 +194,14 @@ export interface EventStore {
   append(
     events: readonly StoredWorldEvent[],
   ): Promise<{ readonly written: number; readonly skipped: number }>;
+  /**
+   * Newest first, and newest first *across* pages — not merely within one.
+   *
+   * The distinction is the whole contract: an adapter that fetches a page and sorts it descending
+   * satisfies "within" while returning the oldest rows in the table, which is indistinguishable
+   * from correct until the log outgrows a single page. Contract tests must therefore use a fixture
+   * larger than the page they request.
+   */
   query(query: EventQuery): Promise<Page<StoredWorldEvent>>;
   /** Delete events older than a tick. Called by the tick job to bound retention. */
   compact(worldId: string, beforeTick: number, limit: number): Promise<number>;

@@ -305,6 +305,59 @@ describe.each(adapters)('$name storage contract', ({ create }) => {
     expect(byRegion.items.map((e) => e.id)).toEqual(['e-3']);
   });
 
+  /**
+   * The regression that matters.
+   *
+   * The assertion above passed for a log that fits in one page, which is why a deployed world at
+   * tick 3346 could serve its timeline from ticks 1-16 without a single test failing: fetching the
+   * first page and sorting *it* descending is indistinguishable from correct until the log is
+   * larger than a page. So this fixture is deliberately much larger than the page it asks for.
+   */
+  it('serves the newest page of a log far larger than one page', async () => {
+    const total = 500;
+    await repo.events.append(
+      Array.from({ length: total }, (_, i) => event(`e-${String(i).padStart(4, '0')}`, i + 1)),
+    );
+
+    const first = await repo.events.query({ worldId: WORLD_ID, limit: 20 });
+    expect(first.items).toHaveLength(20);
+    expect(first.items.map((e) => e.tick)).toEqual(Array.from({ length: 20 }, (_, i) => total - i));
+    expect(first.continuation).toBeDefined();
+
+    // Paging walks backwards through history without repeating or skipping an event.
+    const second = await repo.events.query({
+      worldId: WORLD_ID,
+      limit: 20,
+      continuation: first.continuation as string,
+    });
+    expect(second.items.map((e) => e.tick)).toEqual(
+      Array.from({ length: 20 }, (_, i) => total - 20 - i),
+    );
+
+    const seen = new Set([...first.items, ...second.items].map((e) => e.id));
+    expect(seen.size).toBe(40);
+  });
+
+  /** A page boundary that lands mid-tick must resume inside that tick, not skip its remainder. */
+  it('resumes paging within a tick that spans a page boundary', async () => {
+    await repo.events.append(
+      Array.from({ length: 60 }, (_, i) => event(`e-${String(i).padStart(3, '0')}`, 7)),
+    );
+
+    const first = await repo.events.query({ worldId: WORLD_ID, limit: 25 });
+    expect(first.items).toHaveLength(25);
+    const second = await repo.events.query({
+      worldId: WORLD_ID,
+      limit: 25,
+      continuation: first.continuation as string,
+    });
+
+    const ids = [...first.items, ...second.items].map((e) => e.id);
+    expect(new Set(ids).size).toBe(50);
+    // Descending id within a tick gives a total, stable order across the boundary.
+    expect([...ids]).toEqual([...ids].sort().reverse());
+  });
+
   it('spreads events across epoch partitions', async () => {
     expect(eventEpochOf(0)).toBe(0);
     expect(eventEpochOf(EVENT_EPOCH_TICKS)).toBe(1);

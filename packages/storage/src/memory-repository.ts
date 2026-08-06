@@ -25,6 +25,7 @@ import {
   type WorldRecord,
 } from '@autocosm/domain';
 import type { z } from 'zod';
+import { decodeEventCursor, pageEventsNewestFirst } from './event-paging.js';
 import {
   ConcurrencyConflict,
   boundedLimit,
@@ -568,17 +569,30 @@ export class InMemoryWorldRepository implements WorldRepository {
       return Promise.resolve({ written, skipped });
     },
     query: async (query) => {
-      const matches: StoredWorldEvent[] = [];
+      const all: StoredWorldEvent[] = [];
       for (const [, , cell] of this.#t.events.prefixPartitions(`w:${query.worldId}|e:`)) {
-        const event = WorldEventSchema.parse(JSON.parse(cell.json));
-        if (query.regionId !== undefined && event.regionId !== query.regionId) continue;
-        if (query.lineageId !== undefined && event.lineageId !== query.lineageId) continue;
-        if (query.sinceTick !== undefined && event.tick < query.sinceTick) continue;
-        if (query.untilTick !== undefined && event.tick > query.untilTick) continue;
-        matches.push(event);
+        all.push(WorldEventSchema.parse(JSON.parse(cell.json)));
       }
-      matches.sort((a, b) => b.tick - a.tick || (a.id < b.id ? 1 : -1));
-      return Promise.resolve(paginate(matches, query));
+      // The whole log is in hand here, so windowing is pure bookkeeping — but it runs through the
+      // same walk as the Azure adapter so the two cannot drift apart on what "newest first" means.
+      let latest = 0;
+      for (const event of all) if (event.tick > latest) latest = event.tick;
+      return pageEventsNewestFirst({
+        limit: boundedLimit(query.limit),
+        startTick: query.untilTick ?? latest,
+        floorTick: query.sinceTick ?? 0,
+        cursor: decodeEventCursor(query.continuation),
+        accept: (event) => {
+          if (query.regionId !== undefined && event.regionId !== query.regionId) return false;
+          if (query.lineageId !== undefined && event.lineageId !== query.lineageId) return false;
+          return true;
+        },
+        fetch: (low, high) =>
+          Promise.resolve({
+            rows: all.filter((event) => event.tick >= low && event.tick <= high),
+            complete: true,
+          }),
+      });
     },
     compact: async (worldId, beforeTick, limit) => {
       let removed = 0;

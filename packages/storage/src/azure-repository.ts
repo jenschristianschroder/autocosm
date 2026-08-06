@@ -28,6 +28,7 @@ import { RestError, TableClient, TableServiceClient, odata } from '@azure/data-t
 import { DefaultAzureCredential, type TokenCredential } from '@azure/identity';
 import type { z } from 'zod';
 import { assertProductionSafeStorage } from './guardrails.js';
+import { MAX_EVENT_TICK, decodeEventCursor, pageEventsNewestFirst } from './event-paging.js';
 import { eventEpochOf } from './memory-repository.js';
 import {
   ConcurrencyConflict,
@@ -339,6 +340,49 @@ export class AzureTableWorldRepository implements WorldRepository {
     } catch (error) {
       if (!isNotFound(error)) throw error;
     }
+  }
+
+  /**
+   * Where "now" is, for a newest-first event walk that was given no upper bound.
+   *
+   * Table Storage cannot seek to the end of a range, so the walk has to be told where to start.
+   * The world record carries the authoritative tick; if it is missing (a world that has never been
+   * written) the key space's own ceiling is a safe, if wasteful, fallback.
+   */
+  async #latestEventTick(worldId: string): Promise<number> {
+    const entity = await this.#get(TABLE_NAMES.worlds, 'worlds', worldId);
+    if (entity === undefined) return MAX_EVENT_TICK;
+    return decode(entity, WorldRecordSchema).tick;
+  }
+
+  /**
+   * Every event in an inclusive tick range, or a report that the range holds more than `cap`.
+   *
+   * Truncating would return the *oldest* rows of the window — precisely the bug this replaces — so
+   * an over-full window is reported rather than trimmed, and the caller narrows it instead.
+   */
+  async #readEventWindow(
+    worldId: string,
+    lowTick: number,
+    highTick: number,
+    cap: number,
+  ): Promise<{ rows: readonly StoredWorldEvent[]; complete: boolean }> {
+    const low = String(lowTick).padStart(12, '0');
+    // Ids never contain `~`, so `<paddedTick>~~` sorts after every row key of that tick, and this
+    // avoids widening past 12 digits when the bound is the top of the key space.
+    const high = `${String(highTick).padStart(12, '0')}~~`;
+    const filter = [
+      odata`PartitionKey ge ${epochPartition(worldId, eventEpochOf(lowTick))}`,
+      odata`PartitionKey le ${`${epochPartition(worldId, eventEpochOf(highTick))}~`}`,
+      odata`RowKey ge ${low}`,
+      odata`RowKey le ${high}`,
+    ].join(' and ');
+    const rows: StoredWorldEvent[] = [];
+    for await (const entity of this.#list(TABLE_NAMES.events, filter)) {
+      if (rows.length >= cap) return { rows, complete: false };
+      rows.push(decodeEvent(entity));
+    }
+    return { rows, complete: true };
   }
 
   readonly worlds: WorldStore = {
@@ -720,25 +764,24 @@ export class AzureTableWorldRepository implements WorldRepository {
       return { written, skipped };
     },
     query: async (query) => {
-      // Epoch partitioning keeps a bounded tick window inside a bounded key range.
-      const lowEpoch = query.sinceTick === undefined ? 0 : eventEpochOf(query.sinceTick);
-      const highEpoch = query.untilTick === undefined ? 999_999 : eventEpochOf(query.untilTick);
-      const filter = [
-        odata`PartitionKey ge ${epochPartition(query.worldId, lowEpoch)}`,
-        odata`PartitionKey le ${`${epochPartition(query.worldId, highEpoch)}~`}`,
-      ].join(' and ');
-      const { entities, continuation } = await this.#pageRaw(TABLE_NAMES.events, filter, query);
-      const items = entities
-        .map(decodeEvent)
-        .filter((event) => {
+      const limit = boundedLimit(query.limit);
+      const floorTick = query.sinceTick ?? 0;
+      // The newest events are the last rows of the highest epoch, and Table Storage cannot seek
+      // there. The world record is the authoritative clock, so it tells the walk where "now" is;
+      // callers that already hold it should pass `untilTick` and save the round trip.
+      const startTick = query.untilTick ?? (await this.#latestEventTick(query.worldId));
+      return pageEventsNewestFirst({
+        limit,
+        startTick,
+        floorTick,
+        cursor: decodeEventCursor(query.continuation),
+        accept: (event) => {
           if (query.regionId !== undefined && event.regionId !== query.regionId) return false;
           if (query.lineageId !== undefined && event.lineageId !== query.lineageId) return false;
-          if (query.sinceTick !== undefined && event.tick < query.sinceTick) return false;
-          if (query.untilTick !== undefined && event.tick > query.untilTick) return false;
           return true;
-        })
-        .sort((a, b) => b.tick - a.tick || (a.id < b.id ? 1 : -1));
-      return continuation === undefined ? { items } : { items, continuation };
+        },
+        fetch: async (low, high, cap) => this.#readEventWindow(query.worldId, low, high, cap),
+      });
     },
     compact: async (worldId, beforeTick, limit) => {
       const bound = boundedLimit(limit);

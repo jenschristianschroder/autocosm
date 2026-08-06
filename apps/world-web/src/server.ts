@@ -410,9 +410,13 @@ function registerRoutes(app: FastifyInstance, deps: RouteDependencies): void {
 
   app.get(`${PREFIX}/events`, async (req, reply) => {
     const query = HistoryQuerySchema.parse(req.query);
+    const { state } = await world.load();
     const page = await world.repository.events.query({
       worldId: world.worldId,
       limit: query.limit,
+      // The store cannot seek to the end of an append-only log, so it is told where "now" is.
+      // Without this the timeline starts at the beginning of history and never reaches the present.
+      untilTick: state.world.tick,
       ...(query.regionId === undefined ? {} : { regionId: query.regionId }),
       ...(query.cursor === undefined ? {} : { continuation: query.cursor }),
     });
