@@ -118,6 +118,20 @@ export function livingOrganismIds(draft: WorldDraft): OrganismId[] {
   return ids;
 }
 
+/**
+ * Count living organisms without materialising the id list.
+ *
+ * The organism map also holds recently dead organisms, so `organisms.size` is not the
+ * population. Anything enforcing a population limit must count through this.
+ */
+export function countLivingOrganisms(draft: WorldDraft): number {
+  let living = 0;
+  for (const organism of draft.organisms.values()) {
+    if (organism.alive) living += 1;
+  }
+  return living;
+}
+
 export function organismsInRegion(draft: WorldDraft, regionId: RegionId): Organism[] {
   const out: Organism[] = [];
   for (const id of sortedIds(draft.organisms)) {

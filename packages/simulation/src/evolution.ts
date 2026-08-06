@@ -19,6 +19,7 @@ import type { SimulationConfig } from './config.js';
 import type { EventSink } from './events.js';
 import type { EnergyLedger } from './resolve.js';
 import type { WorldDraft } from './state.js';
+import { countLivingOrganisms } from './state.js';
 
 /**
  * Reproduction, mutation and inheritance.
@@ -69,7 +70,11 @@ export function reproduce(args: ReproduceArgs): ReproductionOutcome {
   const phenotype = derivePhenotype(parent.genotype);
   if (parent.ageTicks < phenotype.maturityAgeTicks) return { child: null, reason: 'notMature' };
   if (draft.world.tick < parent.reproductionReadyTick) return { child: null, reason: 'onCooldown' };
-  if (draft.organisms.size >= config.maxOrganisms) return { child: null, reason: 'population' };
+  // Counts the living, not the map: corpses are retained for inspection, and including them
+  // here would turn a population ceiling into a lifetime birth quota.
+  if (countLivingOrganisms(draft) >= config.maxOrganisms) {
+    return { child: null, reason: 'population' };
+  }
 
   const investment = clampPerMille(args.investment);
   const spend = Math.max(phenotype.reproductionCost, scaleByPerMille(parent.energy, investment));

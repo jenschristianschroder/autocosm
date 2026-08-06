@@ -5,8 +5,22 @@
  * engine may loop without a bound drawn from this configuration.
  */
 export interface SimulationConfig {
-  /** Hard population ceiling. Reproduction is refused above this count. */
+  /**
+   * Hard ceiling on the *living* population. Reproduction is refused above this count.
+   *
+   * Counts living organisms only. Corpses linger in the organism map so a spectator can still
+   * inspect a recent death, and counting them here would make the ceiling cumulative: every
+   * world would sterilise itself permanently once this many organisms had ever been born.
+   */
   readonly maxOrganisms: number;
+  /**
+   * How many dead organisms are kept after they die, so a recent death stays inspectable.
+   *
+   * Permanent ancestry lives in `lineageNodes`, which is never pruned, so dropping a corpse
+   * loses no history. This bound is what keeps the organism map — and the persisted world
+   * record — finite in a world that runs indefinitely.
+   */
+  readonly maxDeadOrganismsRetained: number;
   /** Hard ceiling on persistent constructions. */
   readonly maxStructures: number;
   /** Hard ceiling on derived material definitions, keeping the catalogue bounded. */
@@ -50,6 +64,7 @@ export interface SimulationConfig {
 
 export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = Object.freeze({
   maxOrganisms: 420,
+  maxDeadOrganismsRetained: 120,
   maxStructures: 160,
   maxMaterials: 96,
   maxDecisionsPerTick: 12,

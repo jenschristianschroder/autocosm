@@ -208,6 +208,9 @@ export function advanceTick(state: WorldState, input: TickInput = {}): TickResul
   // 9. Lineage bookkeeping and extinction.
   updateLineages(draft, events);
 
+  // 9b. Old corpses are dropped so storage stays bounded. Ancestry survives in `lineageNodes`.
+  pruneDeadOrganisms(draft, config);
+
   // 10. Decision points.
   for (const organismId of order) {
     const organism = draft.organisms.get(organismId);
@@ -637,6 +640,33 @@ function decayStructures(draft: WorldDraft, events: EventSink): void {
       continue;
     }
     draft.structures.set(id, { ...structure, integrity: clampPerMille(integrity) });
+  }
+}
+
+/**
+ * Drop the oldest corpses once more than `maxDeadOrganismsRetained` are held.
+ *
+ * Dead organisms stay in the map briefly so a spectator following a death event can still open
+ * the organism, but they must not accumulate: the whole map is serialised into the world record
+ * every tick. Permanent ancestry is kept separately in `lineageNodes`, so nothing is lost.
+ *
+ * Retention is by death tick, newest first, with the id as a tie-break, so the survivors are the
+ * same in every process replaying the same history.
+ */
+function pruneDeadOrganisms(draft: WorldDraft, config: SimulationConfig): void {
+  const dead: OrganismId[] = [];
+  for (const id of sortedIds(draft.organisms)) {
+    if (draft.organisms.get(id)?.alive === false) dead.push(id);
+  }
+  if (dead.length <= config.maxDeadOrganismsRetained) return;
+
+  dead.sort((a, b) => {
+    const left = draft.organisms.get(a)?.diedAtTick ?? 0;
+    const right = draft.organisms.get(b)?.diedAtTick ?? 0;
+    return right - left || a.localeCompare(b);
+  });
+  for (const id of dead.slice(config.maxDeadOrganismsRetained)) {
+    draft.organisms.delete(id);
   }
 }
 
