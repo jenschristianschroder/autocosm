@@ -179,23 +179,58 @@ jobs:
             --query properties.outputs -o json > app-outputs.json
           echo "fqdn=$(jq -r '.webFqdn.value' app-outputs.json)" >> "$GITHUB_OUTPUT"
 
-      # A read-only health probe. It never mutates world state, so a failed smoke test cannot
-      # leave the world in a partial condition.
+      # A read-only smoke test. It never mutates world state, so a failure cannot leave the world
+      # in a partial condition.
+      #
+      # Liveness alone is not enough. /health and /readiness answer without deserialising a single
+      # organism or agent, so a schema change that makes stored records unreadable leaves them
+      # green while every real route returns 500. The state probes below therefore exercise routes
+      # that actually load and parse persisted records, which is what turns a record-migration bug
+      # into a failed deploy instead of a silent outage.
       - name: Smoke test
         if: steps.gate.outputs.configured == 'true'
         env:
           FQDN: ${{ steps.app.outputs.fqdn }}
         run: |
           set -euo pipefail
+
+          probe() {
+            curl -sS -o "$2" -w '%{http_code}' "https://${FQDN}$1" || echo 000
+          }
+
+          ready=false
           for attempt in $(seq 1 20); do
-            code=$(curl -fsS -o /tmp/health.json -w '%{http_code}' "https://${FQDN}/api/v1/health" || echo 000)
+            code=$(probe /api/v1/health /tmp/health.json)
             if [ "$code" = "200" ]; then
               echo "healthy: $(cat /tmp/health.json)"
-              curl -fsS "https://${FQDN}/api/v1/readiness" | tee /tmp/readiness.json
-              exit 0
+              ready=true
+              break
             fi
             echo "attempt ${attempt}: http ${code} (cold start can take a while with minReplicas 0)"
             sleep 15
           done
-          echo "::error::world-web did not become healthy"
-          exit 1
+
+          if [ "$ready" != "true" ]; then
+            echo "::error::world-web did not become healthy"
+            exit 1
+          fi
+
+          # Each of these deserialises persisted world records, unlike /health.
+          for route in /api/v1/readiness /api/v1/world /api/v1/snapshot; do
+            code=000
+            for attempt in $(seq 1 4); do
+              code=$(probe "$route" /tmp/probe.json)
+              if [ "$code" = "200" ]; then
+                break
+              fi
+              echo "attempt ${attempt}: ${route} returned http ${code}"
+              sleep 10
+            done
+            if [ "$code" != "200" ]; then
+              echo "::error::${route} returned http ${code} — deployed code cannot read stored world state"
+              head -c 400 /tmp/probe.json || true
+              exit 1
+            fi
+            echo "${route}: 200"
+            head -c 200 /tmp/probe.json; echo
+          done
