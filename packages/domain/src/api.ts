@@ -240,9 +240,46 @@ export const AgentDetailResponseSchema = z.object({
   births: z.number().int().min(0),
   deaths: z.number().int().min(0),
   meanTraits: z.array(TraitDtoSchema),
-  knownMaterials: z.array(idSchema).max(64),
+  /**
+   * Materials this lineage has encountered, with their derived names.
+   *
+   * Carries the label rather than the bare id because an id like `mx1a2b3c` tells a spectator
+   * nothing. The subtitle answers "what is this stuff" from the same numbers the property bars show.
+   */
+  knownMaterials: z
+    .array(
+      z.object({
+        id: idSchema,
+        label: z.string().max(64),
+        subtitle: z.string().max(200),
+      }),
+    )
+    .max(64),
+  /**
+   * Designs this lineage knows how to make.
+   *
+   * `label` is joined from the material the recipe produces rather than read from the stored recipe,
+   * so a design is called the same thing as the thing it makes even when it was learned before the
+   * naming rules existed.
+   */
   knownRecipes: z
-    .array(z.object({ label: z.string().max(64), learnedAtTick: z.number().int().min(0) }))
+    .array(
+      z.object({
+        key: z.string().max(64),
+        label: z.string().max(64),
+        producesMaterialId: idSchema,
+        components: z
+          .array(
+            z.object({
+              materialId: idSchema,
+              label: z.string().max(64),
+              quantity: z.number().int().min(0),
+            }),
+          )
+          .max(8),
+        learnedAtTick: z.number().int().min(0),
+      }),
+    )
     .max(24),
   goals: z
     .array(

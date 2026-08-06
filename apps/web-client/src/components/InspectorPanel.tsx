@@ -236,9 +236,9 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
             <>
               <h3>Known materials</h3>
               <ul className="chips">
-                {agent.knownMaterials.map((id) => (
-                  <li key={id} className="chip">
-                    {id}
+                {agent.knownMaterials.map((material) => (
+                  <li key={material.id} className="chip" title={material.subtitle}>
+                    {material.label}
                   </li>
                 ))}
               </ul>
@@ -250,11 +250,18 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
               <h3>Learned designs</h3>
               <ul className="chips">
                 {agent.knownRecipes.map((recipe) => (
-                  <li key={recipe.label} className="chip">
-                    {recipe.label} · tick {recipe.learnedAtTick}
+                  <li
+                    key={recipe.key}
+                    className="chip"
+                    title={`${recipe.components.map((c) => `${c.label} ×${c.quantity}`).join(' + ')} · learned at tick ${recipe.learnedAtTick}`}
+                  >
+                    {recipe.label}
                   </li>
                 ))}
               </ul>
+              <p className="muted small">
+                How to make something, not the thing itself. Hover to see what it is made of.
+              </p>
             </>
           )}
 

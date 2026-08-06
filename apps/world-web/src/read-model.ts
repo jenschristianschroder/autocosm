@@ -8,6 +8,8 @@ import {
   complexityScore,
   dayPhasePerMille,
   derivePhenotype,
+  deriveMaterialId,
+  deriveMaterialName,
   deriveVisual,
   effectiveTrait,
   regionCentre,
@@ -18,6 +20,7 @@ import {
   type EventHistoryResponse,
   type Genotype,
   type LineageDetailResponse,
+  type MaterialId,
   type OrganismDetailResponse,
   type Region,
   type SnapshotResponse,
@@ -259,6 +262,21 @@ function traitDtos(genotype: Genotype): AgentDetailResponse['meanTraits'] {
   }));
 }
 
+/**
+ * Resolve a material id to something a spectator can read.
+ *
+ * The subtitle is derived here rather than stored: it is a pure function of the property vector, so
+ * caching it would only create a second thing that can drift.
+ */
+function materialChip(
+  state: WorldState,
+  id: MaterialId,
+): { id: string; label: string; subtitle: string } {
+  const material = state.materials.get(id);
+  if (!material) return { id, label: id, subtitle: '' };
+  return { id, label: material.label, subtitle: deriveMaterialName(material).subtitle };
+}
+
 export function composeAgentDetail(
   state: WorldState,
   agentId: string,
@@ -288,10 +306,25 @@ export function composeAgentDetail(
     births: lineage?.births ?? 0,
     deaths: lineage?.deaths ?? 0,
     meanTraits: lineage ? traitDtos(lineage.meanGenotype) : [],
-    knownMaterials: [...agent.knowledge.knownMaterialIds].slice(0, 64),
-    knownRecipes: agent.knowledge.recipes
-      .slice(0, 24)
-      .map((r) => ({ label: r.label, learnedAtTick: r.learnedAtTick })),
+    knownMaterials: [...agent.knowledge.knownMaterialIds]
+      .slice(0, 64)
+      .map((id) => materialChip(state, id)),
+    knownRecipes: agent.knowledge.recipes.slice(0, 24).map((recipe) => {
+      const produces = deriveMaterialId(recipe.components);
+      return {
+        key: recipe.key,
+        // Joined from the produced material rather than trusting the stored label, which may
+        // predate the naming rules or have been copied from another lineage.
+        label: state.materials.get(produces)?.label ?? recipe.label,
+        producesMaterialId: produces,
+        components: recipe.components.slice(0, 8).map((component) => ({
+          materialId: component.materialId,
+          label: state.materials.get(component.materialId)?.label ?? component.materialId,
+          quantity: component.quantity,
+        })),
+        learnedAtTick: recipe.learnedAtTick,
+      };
+    }),
     goals: goals.slice(-20).map((goal) => ({
       id: goal.id,
       text: goal.text,
