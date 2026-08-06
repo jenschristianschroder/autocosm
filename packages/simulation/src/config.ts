@@ -23,7 +23,13 @@ export interface SimulationConfig {
   readonly maxDeadOrganismsRetained: number;
   /** Hard ceiling on persistent constructions. */
   readonly maxStructures: number;
-  /** Hard ceiling on derived material definitions, keeping the catalogue bounded. */
+  /**
+   * Hard ceiling on derived material definitions, keeping the catalogue bounded.
+   *
+   * A backstop, not a balance knob. Discovery is one-way — nothing removes a material — so this
+   * is cumulative, and a world that touches it has crafting disabled for the rest of its life.
+   * It must therefore sit above the point where discovery closes on its own; see the default.
+   */
   readonly maxMaterials: number;
   /** Maximum new AI decisions requested in a single tick. */
   readonly maxDecisionsPerTick: number;
@@ -66,7 +72,12 @@ export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = Object.freeze({
   maxOrganisms: 420,
   maxDeadOrganismsRetained: 120,
   maxStructures: 160,
-  maxMaterials: 96,
+  // Measured with the ceiling lifted, six trajectories over 1500 ticks: discovery converges by
+  // tick ~900 and then stays flat, at 133/161/188/189/201/253 materials. The reachable
+  // combination space closes on its own, so no eviction is needed — only headroom above the
+  // highest natural fixed point. At 96 every world was truncated at 40-70% of its own chemistry
+  // by tick ~182, roughly 15% into a 1200-tick run.
+  maxMaterials: 320,
   maxDecisionsPerTick: 12,
   decisionExpiryTicks: 40,
   minTicksBetweenDecisionsPerLineage: 6,

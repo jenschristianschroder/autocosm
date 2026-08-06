@@ -36,6 +36,8 @@ function anObservation(): Observation {
       reproductionReady: true,
       generation: 2,
       inventory: [],
+      carryCapacity: 240,
+      inventorySlotLimit: 8,
       planning: 300,
       manipulation: 250,
       memorySlots: 4,

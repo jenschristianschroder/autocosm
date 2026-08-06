@@ -65,15 +65,40 @@ function rejections(events: readonly WorldEvent[]): Map<RejectionKey, number> {
   return counts;
 }
 
+/** A minimal `actionRejected` event, so the harvester can be proved without an unhealthy world. */
+function rejectionEvent(actionType: AgentActionType, reason: RejectionReason): WorldEvent {
+  return {
+    id: 'e-control-0000000000-00000' as WorldEvent['id'],
+    version: 1,
+    worldId: 'w-control' as WorldEvent['worldId'],
+    regionId: 'r-control' as WorldEvent['regionId'],
+    tick: 1 as WorldEvent['tick'],
+    ordinal: 0,
+    kind: 'actionRejected',
+    summary: 'control',
+    payload: { actionType, reason },
+  };
+}
+
 describe('observability of the self', () => {
   const worlds = [run(4_242_424, 'w-observe'), run(91_017, 'w-observe')];
 
   it('harvests rejections at all', () => {
-    // The control for the three assertions below. "Zero of X" is only evidence when the harvester
-    // demonstrably sees rejections; a silently empty map satisfies every one of them.
+    // The control for the assertions below. "Zero of X" is only evidence when the harvester
+    // demonstrably counts a rejection it is given; a silently empty map satisfies every one of them.
+    //
+    // Grounded on a constructed event rather than on the world producing rejections, because the
+    // world no longer reliably does. Raising `maxMaterials` past the point where discovery closes
+    // on its own took the whole-world rejection count over 1200 ticks to 0/0/4 across three
+    // trajectories — so a control that needs the world to fail would now be the flakiest assertion
+    // in the suite, and would fail for the best possible reason.
+    const staged = rejections([rejectionEvent('combine', 'actionUnavailable')]);
+    expect(staged.get('combine/actionUnavailable')).toBe(1);
+    expect([...staged.keys()]).toEqual(['combine/actionUnavailable']);
+
+    // And the harvester agrees with the raw stream on the real worlds, at whatever count they reach.
     for (const world of worlds) {
       const counted = [...rejections(world.events).values()].reduce((sum, n) => sum + n, 0);
-      expect(counted).toBeGreaterThan(0);
       expect(counted).toBe(world.events.filter((e) => e.kind === 'actionRejected').length);
     }
   });
@@ -93,6 +118,18 @@ describe('observability of the self', () => {
   it('never proposes a step it cannot pay for', () => {
     for (const world of worlds) {
       expect(rejections(world.events).get('move/insufficientEnergy') ?? 0).toBe(0);
+    }
+  });
+
+  it('never reaches for a material it has nowhere to put', () => {
+    // Two causes, both the same shape as the three above. The gather gate compared what an organism
+    // carried against a heuristic-local `MAX_CARRIED_MATERIAL = 300` while the resolver enforced
+    // `inventoryCapacity = 240`, so everything in the 240-299 band proposed a certain rejection; and
+    // node selection took the first node with stock regardless of whether a slot was free for its
+    // material. Measured over 1200 ticks before the fix: 184/915/496 across three trajectories, with
+    // `maxCarried` never once exceeding 240.
+    for (const world of worlds) {
+      expect(rejections(world.events).get('collect/inventoryFull') ?? 0).toBe(0);
     }
   });
 

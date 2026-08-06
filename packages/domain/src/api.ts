@@ -505,7 +505,7 @@ export const WorldMetaResponseSchema = z.object({
         discoveredAtTick: z.number().int().min(0).optional(),
       }),
     )
-    .max(256),
+    .max(384),
   /** True when the deployment is running without a configured AI provider. */
   heuristicOnly: z.boolean(),
   /** True when a configured AI provider is failing and the world is running degraded. */

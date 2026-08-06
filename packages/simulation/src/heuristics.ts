@@ -25,9 +25,6 @@ import {
  */
 const BUILD_MATERIAL_THRESHOLD = 120;
 
-/** Carrying capacity for raw material, in `mu`. Bounds inventory growth. */
-const MAX_CARRIED_MATERIAL = 300;
-
 /**
  * How worn a construction must be before a passer-by will spend material on it, in per mille.
  *
@@ -229,12 +226,22 @@ export function decideHeuristically(observation: Observation, seed: number): Age
   // 9. Gather materials. A lineage that can build actively seeks raw material rather than
   //    waiting to stumble over it — this is what makes construction emerge at all. Gated on
   //    a comfortable energy level so that gathering never competes with staying alive.
-  if (can.has('collect') && carried < MAX_CARRIED_MATERIAL && energyRatio > 600) {
+  //
+  //    Both inventory limits are respected here, not just the volume one. A heuristic bound
+  //    looser than the simulation's own capacity guarantees a rejection, and because `decide()`
+  //    returns on the first match, that rejection costs the organism its entire turn.
+  if (can.has('collect') && carried < self.carryCapacity && energyRatio > 600) {
     const wantsMaterial = can.has('build') || rng.chance(clampPerMille(drives.build));
     if (wantsMaterial) {
-      const node = observation.resources.find((r) => r.quantity > 0);
+      // A full slot table can still accept more of something already held, so the choice of
+      // node — not merely whether to gather — is what the limit constrains.
+      const held = new Set(self.inventory.map((e) => e.materialId));
+      const hasFreeSlot = self.inventory.length < self.inventorySlotLimit;
+      const node = observation.resources.find(
+        (r) => r.quantity > 0 && (hasFreeSlot || held.has(r.materialId)),
+      );
       if (node) {
-        if (node.distanceCu <= 420) {
+        if (node.distanceCu <= INTERACTION_RANGE_CU) {
           return { type: 'collect', resourceNodeId: node.resourceNodeId, quantity: 60 };
         }
         if (canReach(node.distanceCu)) {

@@ -129,7 +129,7 @@ export function advanceTick(state: WorldState, input: TickInput = {}): TickResul
     const current = draft.organisms.get(organismId);
     if (!current || !current.alive) continue;
     const phenotype = derivePhenotype(current.genotype);
-    const observation = observe(draft, current, phenotype);
+    const observation = observe(draft, current, phenotype, config);
     observations.set(organismId, observation);
 
     const proposal = input.proposals?.get(organismId);

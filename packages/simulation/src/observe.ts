@@ -1,4 +1,5 @@
 import {
+  MAX_INVENTORY_ENTRIES,
   MAX_OBSERVED_GOALS,
   MAX_OBSERVED_MEMORIES,
   MAX_OBSERVED_ORGANISMS,
@@ -25,6 +26,7 @@ import {
   type Structure,
 } from '@autocosm/domain';
 import { availableActions } from './capabilities.js';
+import { DEFAULT_SIMULATION_CONFIG, type SimulationConfig } from './config.js';
 import { sortedIds, type WorldState } from './state.js';
 
 /**
@@ -52,7 +54,12 @@ export function structureVisibilityRadiusCu(
  * neighbours are described in coarse bands rather than exact traits, and every list is
  * truncated to a documented cap so prompts stay small and predictable.
  */
-export function observe(draft: WorldState, organism: Organism, phenotype?: Phenotype): Observation {
+export function observe(
+  draft: WorldState,
+  organism: Organism,
+  phenotype?: Phenotype,
+  config: SimulationConfig = DEFAULT_SIMULATION_CONFIG,
+): Observation {
   const p = phenotype ?? derivePhenotype(organism.genotype);
   const agent = draft.agents.get(organism.agentId);
   const region = draft.regions.get(organism.regionId);
@@ -81,6 +88,8 @@ export function observe(draft: WorldState, organism: Organism, phenotype?: Pheno
     planning: p.effectivePlanning,
     manipulation: p.manipulationScore,
     memorySlots: p.memorySlots,
+    carryCapacity: config.inventoryCapacity,
+    inventorySlotLimit: MAX_INVENTORY_ENTRIES,
     speedCuPerTick: p.speedCuPerTick,
     moveCostPer100Cu: p.moveCostPer100Cu,
     perceptionRadiusCu: radius,

@@ -507,7 +507,6 @@ function applyCombine(
 ): Resolution {
   const components = toComponents(action.components);
   if (!hasInventory(organism, components)) return reject('insufficientMaterial');
-  if (ctx.draft.materials.size >= ctx.config.maxMaterials) return reject('actionUnavailable');
 
   const volume = totalVolume(components);
   const cost = Math.max(1, Math.trunc(volume / 4));
@@ -517,6 +516,13 @@ function applyCombine(
   // those properties rather than supplied by the agent.
   const derivedId = deriveMaterialId(components);
   const existing = ctx.draft.materials.get(derivedId);
+  // Only a *new* entry can overflow the catalogue. Material ids are content-addressed, so
+  // repeating a combination resolves to the id already held and `set` leaves the size unchanged.
+  // Testing the cap before that is known bounds nothing and permanently disables all crafting the
+  // moment the catalogue saturates — which every world reaches, because discovery is one-way.
+  if (!existing && ctx.draft.materials.size >= ctx.config.maxMaterials) {
+    return reject('actionUnavailable');
+  }
   const definition =
     existing ?? combineMaterials(derivedId, components, ctx.draft.materials, ctx.draft.world.tick);
   if (!definition) return reject('insufficientMaterial');

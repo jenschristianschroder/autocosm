@@ -75,6 +75,8 @@ function projectObservation(observation: Observation, reason: string, terse = fa
       manipulation: observation.self.manipulation,
       speedCuPerTick: observation.self.speedCuPerTick,
       moveCostPer100Cu: observation.self.moveCostPer100Cu,
+      carryCapacity: observation.self.carryCapacity,
+      inventorySlotLimit: observation.self.inventorySlotLimit,
       perceptionRadiusCu: observation.self.perceptionRadiusCu,
     },
     environment: observation.environment,

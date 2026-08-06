@@ -46,8 +46,14 @@ import type { WorldState } from '@autocosm/simulation';
 export const MAX_SNAPSHOT_ORGANISMS = 600;
 export const MAX_SNAPSHOT_STRUCTURES = 300;
 export const MAX_SNAPSHOT_RESOURCES = 400;
-/** Ceiling on the world material catalogue, comfortably above the simulation's own `maxMaterials`. */
-const MAX_CATALOGUE_MATERIALS = 256;
+/**
+ * Ceiling on the world material catalogue, comfortably above the simulation's own `maxMaterials`.
+ *
+ * It has to stay above it. This slice is alphabetical by id, so a catalogue larger than this
+ * ceiling would drop an arbitrary tail — and every material in that tail renders as a raw id
+ * wherever it is referenced, which is precisely the illegibility this catalogue exists to fix.
+ */
+const MAX_CATALOGUE_MATERIALS = 384;
 const MAX_LINEAGE_NODES = 400;
 const MAX_AGENT_MEMORIES = 16;
 

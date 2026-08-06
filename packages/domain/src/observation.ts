@@ -56,6 +56,21 @@ export interface ObservedSelf {
   readonly reproductionReady: boolean;
   readonly generation: number;
   readonly inventory: readonly { readonly materialId: MaterialId; readonly quantity: number }[];
+  /**
+   * Total material the body can hold, in `mu`.
+   *
+   * An organism knows when its hands are full. Without this a policy cannot distinguish
+   * "nothing left to pick up" from "nowhere left to put it", so it spends the turn proposing
+   * a collection the simulation is certain to refuse.
+   */
+  readonly carryCapacity: number;
+  /**
+   * How many *distinct* materials the body can hold at once.
+   *
+   * Capacity and slots are separate limits: a nearly empty organism holding eight kinds of
+   * material cannot accept a ninth. Both must be visible or the difference is unlearnable.
+   */
+  readonly inventorySlotLimit: number;
   readonly attachedStructureId?: StructureId | undefined;
   /** Effective, emergent deliberation capacity. Low values mean shallow reasoning. */
   readonly planning: PerMille;
@@ -251,6 +266,8 @@ const observedSelfSchema = z.object({
   planning: perMille,
   manipulation: perMille,
   memorySlots: z.number().int().min(0).max(64),
+  carryCapacity: z.number().int().min(0),
+  inventorySlotLimit: z.number().int().min(0),
   speedCuPerTick: z.number().finite(),
   moveCostPer100Cu: z.number().finite(),
   perceptionRadiusCu: z.number().finite(),
