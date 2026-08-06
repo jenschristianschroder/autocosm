@@ -28,6 +28,34 @@ const BUILD_MATERIAL_THRESHOLD = 120;
 /** Carrying capacity for raw material, in `mu`. Bounds inventory growth. */
 const MAX_CARRIED_MATERIAL = 300;
 
+/**
+ * How worn a construction must be before a passer-by will spend material on it, in per mille.
+ *
+ * High enough that maintenance starts long before collapse is imminent, low enough that a
+ * freshly-raised structure is not immediately patched for no gain.
+ */
+const REPAIR_INTEGRITY_THRESHOLD = 800;
+
+/**
+ * How far an organism will travel to maintain a structure, in `cu`.
+ *
+ * Deliberately wider than {@link INTERACTION_RANGE_CU}: the whole point is that a builder crosses
+ * the clearing to tend its work rather than only mending what it happens to be standing on.
+ */
+const REPAIR_SEEK_RANGE_CU = 1400;
+
+/** Mirrors `SimulationConfig.interactionRadiusCu`; the heuristic must not propose out-of-range acts. */
+const INTERACTION_RANGE_CU = 420;
+
+/**
+ * Material committed to a single repair, in `mu`.
+ *
+ * Sized to {@link BUILD_MATERIAL_THRESHOLD} rather than a token patch: a structure's median volume
+ * is close to what a builder carries, so a full load restores most of a worn one while a scrap
+ * restores single per-mille and wastes the tick.
+ */
+const REPAIR_MATERIAL_UNITS = BUILD_MATERIAL_THRESHOLD;
+
 export function decideHeuristically(observation: Observation, seed: number): AgentAction {
   const rng = new Prng(hashSeed('heuristic', seed, observation.self.organismId, observation.tick));
   const can = new Set(observation.availableActions);
@@ -97,8 +125,9 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     }
   }
 
-  // 7. Build. Only lineages that evolved manipulation and memory reach this branch.
   const carried = self.inventory.reduce((sum, e) => sum + e.quantity, 0);
+
+  // 7. Build. Only lineages that evolved manipulation and memory reach this branch.
   if (can.has('build') && energyRatio > 450) {
     const nearbyStructure = observation.structures.some(
       (s) => s.builtByOwnLineage && s.distanceCu < 900,
@@ -128,7 +157,53 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     }
   }
 
-  // 7. Gather materials. A lineage that can build actively seeks raw material rather than
+  // 8. Maintain what already exists. Without this branch nothing built ever outlives a simulated
+  //    day: integrity only falls, so every construction in the world's history collapsed.
+  //
+  //    Ordered *after* building, and gated on the same material threshold, on measured evidence:
+  //    when maintenance came first and needed only a scrap, patching consumed the stock builders
+  //    were accumulating and construction fell from 31 structures to 9 — the world traded building
+  //    for mending and still kept nothing. Reaching here with a full load means the build branch
+  //    declined, which it does when one of this lineage's structures already stands nearby. That is
+  //    precisely the organism that used to hoard material beside its own crumbling work.
+  //
+  //    Open to any lineage: a construction is a shared landmark and tending a neighbour's is a
+  //    cooperative act.
+  if (can.has('repair') && carried >= BUILD_MATERIAL_THRESHOLD && energyRatio > 400) {
+    const worn = observation.structures
+      .filter(
+        (s) => s.integrity < REPAIR_INTEGRITY_THRESHOLD && s.distanceCu <= REPAIR_SEEK_RANGE_CU,
+      )
+      .sort(
+        (a, b) =>
+          Number(b.builtByOwnLineage) - Number(a.builtByOwnLineage) ||
+          a.integrity - b.integrity ||
+          (a.structureId < b.structureId ? -1 : 1),
+      )[0];
+    if (worn) {
+      if (worn.distanceCu <= INTERACTION_RANGE_CU) {
+        const stock = self.inventory
+          .slice()
+          .sort((a, b) => b.quantity - a.quantity || (a.materialId < b.materialId ? -1 : 1))[0];
+        if (stock) {
+          return {
+            type: 'repair',
+            structureId: worn.structureId,
+            components: [
+              {
+                materialId: stock.materialId,
+                quantity: Math.max(1, Math.min(REPAIR_MATERIAL_UNITS, Math.trunc(stock.quantity))),
+              },
+            ],
+          };
+        }
+      } else if (can.has('move')) {
+        return { type: 'move', target: worn.position };
+      }
+    }
+  }
+
+  // 9. Gather materials. A lineage that can build actively seeks raw material rather than
   //    waiting to stumble over it — this is what makes construction emerge at all. Gated on
   //    a comfortable energy level so that gathering never competes with staying alive.
   if (can.has('collect') && carried < MAX_CARRIED_MATERIAL && energyRatio > 600) {
@@ -146,7 +221,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     }
   }
 
-  // 8. Cooperate: feed a starving kin when comfortable.
+  // 10. Cooperate: feed a starving kin when comfortable.
   if (can.has('share') && energyRatio > 800) {
     const kin = observation.organisms.find(
       (o) => o.kin && o.healthBand === 'weak' && o.distanceCu <= 420,
@@ -160,7 +235,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     }
   }
 
-  // 9. Communicate. Cheap, and the only way culture spreads.
+  // 11. Communicate. Cheap, and the only way culture spreads.
   if (can.has('signal') && rng.chance(scaleByPerMille(200, drives.cooperate))) {
     const teachable = observation.knownRecipes[0];
     if (teachable !== undefined && rng.chance(400)) {
@@ -170,7 +245,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     return { type: 'signal', channel: alarm ? 'alarm' : 'food', intensity: 500 };
   }
 
-  // 10. Top up before wandering, weighted by the forage drive.
+  // 12. Top up before wandering, weighted by the forage drive.
   if (energyRatio < 900 && rng.chance(clampPerMille(drives.forage))) {
     const feed = nearestFeeding(observation);
     if (feed) return feed;
@@ -179,7 +254,7 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     }
   }
 
-  // 11. Explore, weighted by drive. Sessile lineages simply rest.
+  // 13. Explore, weighted by drive. Sessile lineages simply rest.
   if (can.has('move') && self.speedCuPerTick > 40 && rng.chance(clampPerMille(drives.explore))) {
     const jitter = self.speedCuPerTick * 6;
     return {

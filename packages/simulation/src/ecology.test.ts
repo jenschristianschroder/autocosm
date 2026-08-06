@@ -92,9 +92,15 @@ describe('seeded biosphere', () => {
     expect(structure).toBeDefined();
     if (!structure) return;
     expect(structure.components.length).toBeGreaterThan(0);
-    expect(structure.functions.length).toBeGreaterThan(0);
     expect(structure.createdByLineageId).toBeTruthy();
     expect(structure.volume).toBeGreaterThan(0);
+
+    // Function derivation is asserted across the world, not on this arbitrary sample. A structure
+    // whose materials miss every threshold in FUNCTION_RULES is a designed outcome — describeStructure
+    // renders it as `inert <pattern>` — and roughly half of everything built is inert, so sampling one
+    // structure tests which one happened to be first, not whether derivation works.
+    const withFunctions = [...state.structures.values()].filter((s) => s.functions.length > 0);
+    expect(withFunctions.length).toBeGreaterThan(0);
   });
 
   it('lets a different lineage discover another lineage’s creation', () => {

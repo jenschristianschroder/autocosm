@@ -243,12 +243,21 @@ export function initialIntegrity(properties: MaterialProperties): PerMille {
 /**
  * Integrity lost per tick.
  *
- * Porous, soft constructions crumble; dense hard ones persist. Always at least 1 so that
- * abandoned structures eventually disappear and storage stays bounded.
+ * Porous, soft constructions crumble; dense hard ones persist.
+ *
+ * The scale here is load-bearing, and was originally wrong. Dividing resistance by 250 meant even a
+ * flawless material — hardness 1000, porosity 0 — only slowed decay from 6 to 2, capping the life of
+ * the best possible construction at 466 ticks and the typical one near 160. Measured over 1500 ticks
+ * on two seeds, every structure ever built collapsed and none stood at the end: the world could not
+ * keep anything. Halving the divisor lets a genuinely durable build reach 1, so material choice
+ * decides whether a construction is a landmark or a season's shelter.
+ *
+ * Never zero: an abandoned structure must still disappear so storage stays bounded without relying
+ * on the `maxStructures` cap alone. Persistence beyond that is earned by repair, not by material.
  */
 export function decayPerTick(properties: MaterialProperties): number {
   const resistance = Math.trunc((properties.hardness + (1000 - properties.porosity)) / 2);
-  return Math.max(1, 6 - Math.trunc(resistance / 250));
+  return Math.max(1, 6 - Math.trunc(resistance / 125));
 }
 
 /** Effective magnitude of a function after integrity damage is taken into account. */
@@ -256,6 +265,33 @@ export function functionMagnitude(structure: Structure, id: StructureFunctionId)
   const found = structure.functions.find((f) => f.id === id);
   if (!found) return 0;
   return clampPerMille(Math.trunc((found.magnitude * structure.integrity) / 1000));
+}
+
+/**
+ * Integrity restored by patching a structure with a given volume of material.
+ *
+ * Grounded in the same physics as construction: material equal to the structure's whole volume
+ * would restore it completely, so a tenth of its bulk buys a tenth of full integrity. The patch is
+ * then scaled by how well it matches what the structure is made of — hardness is what carries load,
+ * so bracing a dense shell with something soft mends far less than bracing it with its own stuff.
+ *
+ * Always at least 1 when any material is spent, so maintenance is never a pure loss, and never more
+ * than the full range, so no single patch can outrun the cap.
+ */
+export function repairYield(
+  structureProperties: MaterialProperties,
+  patchProperties: MaterialProperties,
+  patchVolume: Mu,
+  structureVolumeMu: Mu,
+): PerMille {
+  const volume = Math.max(0, toInt(patchVolume));
+  if (volume <= 0) return 0;
+  const bulk = Math.max(1, toInt(structureVolumeMu));
+  const share = Math.trunc((volume * 1000) / bulk);
+  const affinity = clampPerMille(
+    1000 - Math.abs(structureProperties.hardness - patchProperties.hardness),
+  );
+  return clampPerMille(Math.max(1, Math.trunc((share * affinity) / 1000)));
 }
 
 /** Append a usage record, dropping the oldest entry once the bound is reached. */

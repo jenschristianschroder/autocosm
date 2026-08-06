@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   derivePhenotype,
   deriveRecipeKey,
+  scaleByPerMille,
   type KnownRecipe,
   type Organism,
   type Signal,
@@ -43,11 +44,23 @@ function context(state: WorldState): ResolutionContext {
   return { draft, config: DEFAULT_SIMULATION_CONFIG, events, ledger: new EnergyLedger() };
 }
 
-/** A living organism whose agent knows at least one recipe and has evolved a usable signal. */
+/** Intensity every staged teach signal is emitted at. */
+const TEACH_INTENSITY = 600;
+
+/**
+ * A living organism that knows a recipe, has evolved a usable signal, and can afford to emit one.
+ *
+ * The energy floor matters: `applySignal` checks affordability *before* it looks the recipe up, so a
+ * teacher picked without it can reject with `insufficientEnergy` and quietly stop these tests
+ * exercising recipe identity at all. Which organism is first in id order depends on the whole
+ * simulation's trajectory, so the floor is what keeps the fixture pinned to its subject.
+ */
 function findTeacher(state: WorldState): { organismId: string; recipeKey: string } {
+  const signalCost = Math.max(1, scaleByPerMille(6, TEACH_INTENSITY));
   for (const id of sortedIds(state.organisms)) {
     const organism = state.organisms.get(id);
     if (!organism?.alive) continue;
+    if (organism.energy < signalCost) continue;
     if (derivePhenotype(organism.genotype).signalRadiusCu <= 0) continue;
     const recipe = state.agents.get(organism.agentId)?.knowledge.recipes[0];
     if (recipe) return { organismId: id, recipeKey: recipe.key };
@@ -87,6 +100,16 @@ function stageTeaching(state: WorldState): {
   const organisms = new Map(state.organisms);
   organisms.set(listener.id, { ...listener, position: teacher.position });
 
+  // Propagation reads the listener's position *after* the tick's actions resolve, so a radius of
+  // one cu only works while the listener happens not to move — which is a property of the whole
+  // simulation's trajectory, not of recipe identity. Sizing the radius to a single step keeps the
+  // listener inside it whatever it decides to do, while staying orders of magnitude below the
+  // distance to any other organism, so no unintended listener is caught.
+  const listenerReach = Math.max(
+    1,
+    Math.ceil(derivePhenotype(listener.genotype).speedCuPerTick) + 1,
+  );
+
   const signal: Signal = {
     organismId: teacher.id,
     lineageId: teacher.lineageId,
@@ -94,8 +117,8 @@ function stageTeaching(state: WorldState): {
     position: teacher.position,
     regionId: teacher.regionId,
     channel: 'teach',
-    intensity: 600,
-    radiusCu: 1,
+    intensity: TEACH_INTENSITY,
+    radiusCu: listenerReach,
     // Emitted by the tick that is about to run, which is when propagation considers it.
     emittedAtTick: state.world.tick + 1,
     recipe,

@@ -68,6 +68,7 @@ export function availableActions(organism: Organism, phenotype?: Phenotype): Age
     'build',
     'inspect',
     'repurpose',
+    'repair',
     'rest',
   ];
   return all.filter((action) => meetsRequirement(action, p, mature));

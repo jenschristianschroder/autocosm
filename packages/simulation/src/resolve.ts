@@ -7,6 +7,7 @@ import {
   MAX_STRUCTURE_USAGE_RECORDS,
   MAX_TRAIT_EMPHASIS,
   MIN_STRUCTURE_VOLUME,
+  PER_MILLE,
   SIGNAL_LIFETIME_TICKS,
   asMaterialId,
   asMemoryId,
@@ -27,6 +28,7 @@ import {
   normaliseComponents,
   recordUsage,
   regionIdOf,
+  repairYield,
   scaleByPerMille,
   stepToward,
   totalVolume,
@@ -152,6 +154,8 @@ export function resolveAction(
       return applyInspect(ctx, organism, phenotype, action);
     case 'repurpose':
       return applyRepurpose(ctx, organism, phenotype, action);
+    case 'repair':
+      return applyRepair(ctx, organism, action);
     case 'rest':
       return ACCEPTED;
     default:
@@ -769,10 +773,74 @@ function applyRepurpose(
   return ACCEPTED;
 }
 
+/**
+ * Spend carried material to push a structure's integrity back up.
+ *
+ * This is the only force in the world that opposes decay, so it is what decides whether anything
+ * built is ever kept. Deliberately open to any lineage: maintaining a neighbour's construction is a
+ * cooperative act, and the structure is a shared landmark either way.
+ */
+function applyRepair(
+  ctx: ResolutionContext,
+  organism: Organism,
+  action: Extract<AgentAction, { type: 'repair' }>,
+): Resolution {
+  const structure = ctx.draft.structures.get(asStructure(action.structureId));
+  if (!structure) return reject('unknownTarget');
+  if (distance(organism.position, structure.position) > ctx.config.interactionRadiusCu) {
+    return reject('outOfRange');
+  }
+  if (structure.integrity >= PER_MILLE) return reject('actionUnavailable');
+
+  const components = toComponents(action.components);
+  if (!hasInventory(organism, components)) return reject('insufficientMaterial');
+  const patchVolume = totalVolume(components);
+  if (patchVolume <= 0) return reject('insufficientMaterial');
+
+  // Patching is cheaper per unit than raising a structure from nothing: the frame already exists.
+  const cost = Math.max(1, Math.trunc((patchVolume * ctx.config.buildEnergyPerUnit) / 2));
+  if (organism.energy < cost) return reject('insufficientEnergy');
+
+  const patchProperties = blendProperties(components, ctx.draft.materials);
+  const restored = repairYield(
+    structure.properties,
+    patchProperties,
+    patchVolume,
+    structure.volume,
+  );
+  const integrity = clampPerMille(structure.integrity + restored);
+
+  ctx.ledger.debit(cost);
+  ctx.draft.organisms.set(organism.id, {
+    ...organism,
+    energy: organism.energy - cost,
+    inventory: consumeInventory(organism.inventory, components),
+  });
+  ctx.draft.structures.set(structure.id, {
+    ...structure,
+    integrity,
+    lastChangedAtTick: ctx.draft.world.tick,
+    usage: recordUsage(structure.usage, {
+      tick: ctx.draft.world.tick,
+      organismId: organism.id,
+      lineageId: organism.lineageId,
+      kind: 'repair',
+    }).slice(-MAX_STRUCTURE_USAGE_RECORDS),
+  });
+  learnStructure(ctx, organism.agentId, structure.id);
+  ctx.events.emit('structureRepaired', organism.regionId, {
+    summary: `${organism.id} repaired a ${structure.label}`,
+    organismId: organism.id,
+    agentId: organism.agentId,
+    lineageId: organism.lineageId,
+    payload: { structureId: structure.id, integrity, restored },
+  });
+  return ACCEPTED;
+}
+
 /* -------------------------------------------------------------------------- */
 /* Helpers                                                                     */
 /* -------------------------------------------------------------------------- */
-
 function strongestFunction(functions: readonly DerivedFunction[]) {
   if (functions.length === 0) return 'shelter' as const;
   return functions.reduce((best, f) => (f.magnitude > best.magnitude ? f : best)).id;

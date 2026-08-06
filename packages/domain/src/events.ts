@@ -38,6 +38,7 @@ export type WorldEventKind =
   | 'structureBuilt'
   | 'structureUsed'
   | 'structureDamaged'
+  | 'structureRepaired'
   | 'structureRepurposed'
   | 'structureCollapsed'
   | 'knowledgeShared'
@@ -101,6 +102,11 @@ export interface EventPayloads {
   };
   structureUsed: { readonly structureId: StructureId; readonly functionId: StructureFunctionId };
   structureDamaged: { readonly structureId: StructureId; readonly integrity: number };
+  structureRepaired: {
+    readonly structureId: StructureId;
+    readonly integrity: number;
+    readonly restored: number;
+  };
   structureRepurposed: {
     readonly structureId: StructureId;
     readonly pattern: StructurePattern;

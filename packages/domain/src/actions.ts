@@ -108,6 +108,18 @@ export const RepurposeActionSchema = z.object({
   pattern: z.enum(STRUCTURE_PATTERNS),
 });
 
+/**
+ * Spend carried material to restore a structure's integrity.
+ *
+ * Without this, integrity only ever falls: nothing built is ever kept, so the world accumulates no
+ * visible history. Maintenance is what makes a construction outlive its builder.
+ */
+export const RepairActionSchema = z.object({
+  type: z.literal('repair'),
+  structureId: idSchema,
+  components: z.array(componentSchema).min(1).max(MAX_ACTION_COMPONENTS),
+});
+
 export const RestActionSchema = z.object({ type: z.literal('rest') });
 
 export const AgentActionSchema = z.discriminatedUnion('type', [
@@ -124,6 +136,7 @@ export const AgentActionSchema = z.discriminatedUnion('type', [
   BuildActionSchema,
   InspectActionSchema,
   RepurposeActionSchema,
+  RepairActionSchema,
   RestActionSchema,
 ]);
 
@@ -144,6 +157,7 @@ export const AGENT_ACTION_TYPES = [
   'build',
   'inspect',
   'repurpose',
+  'repair',
   'rest',
 ] as const satisfies readonly AgentActionType[];
 
@@ -201,6 +215,9 @@ export const CAPABILITY_REQUIREMENTS: readonly CapabilityRequirement[] = Object.
   { action: 'collect', minManipulation: 120 },
   { action: 'combine', minManipulation: 220, minMemorySlots: 2 },
   { action: 'build', minManipulation: 250, minMemorySlots: 2 },
+  // Maintaining a construction needs the same hands as raising one, but no new design insight,
+  // so repair is deliberately gated no harder than build.
+  { action: 'repair', minManipulation: 250, minMemorySlots: 2 },
   { action: 'repurpose', minManipulation: 400, minMemorySlots: 3, minPlanning: 120 },
   { action: 'signal', minSignalRadiusCu: 200 },
   { action: 'inspect', minMemorySlots: 1 },
