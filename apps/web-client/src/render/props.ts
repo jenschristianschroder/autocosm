@@ -15,13 +15,44 @@ import { markPickable } from './picking';
 /**
  * Structures and resource nodes.
  *
- * A structure's silhouette comes from its authoritative `pattern`, and its condition from
- * `integrity` — a crumbling shelter visibly sags and darkens. Nothing here invents a capability:
- * the derived `functions` list is shown in the inspector, not implied by the geometry.
+ * A structure's silhouette comes from its authoritative `pattern`, its tint from the lineage that
+ * raised it, and its condition from `integrity` — a crumbling shelter visibly sags and darkens.
+ * Nothing here invents a capability: the derived `functions` list is shown in the inspector, not
+ * implied by the geometry.
  */
 
 const MATRIX_STRIDE = 16;
 const COLOUR_STRIDE = 4;
+
+/** How much of a structure's tint comes from its builder rather than its material pattern. */
+const LINEAGE_TINT_WEIGHT = 0.7;
+
+/**
+ * Convert a lineage hue to RGB at a fixed, deliberately unsaturated tone.
+ *
+ * Lineage hues are spread around the full circle, and a fully saturated wheel reads as decoration
+ * rather than data. Holding saturation well below 1 keeps every lineage distinguishable while
+ * leaving the structure looking built rather than painted.
+ */
+export function lineageTint(hueDeg: number, saturation = 0.5): [number, number, number] {
+  const h = (((hueDeg % 360) + 360) % 360) / 60;
+  const c = saturation;
+  const x = c * (1 - Math.abs((h % 2) - 1));
+  const m = 1 - c;
+  const [r, g, b]: [number, number, number] =
+    h < 1
+      ? [c, x, 0]
+      : h < 2
+        ? [x, c, 0]
+        : h < 3
+          ? [0, c, x]
+          : h < 4
+            ? [0, x, c]
+            : h < 5
+              ? [x, 0, c]
+              : [c, 0, x];
+  return [r + m, g + m, b + m];
+}
 
 type Pattern = StructureDto['pattern'];
 
@@ -35,6 +66,32 @@ const PATTERN_COLOUR: Record<Pattern, [number, number, number]> = {
   beacon: [0.72, 0.62, 0.28],
   snare: [0.4, 0.2, 0.22],
 };
+
+/**
+ * The colour a single structure instance is drawn in.
+ *
+ * Exported so the invariant is testable without an engine — the same seam `pushCellIndices` uses
+ * in `terrain.ts`, and for the same reason: a renderer bug that produces a *plausible* colour is
+ * invisible to every test that only checks the scene was built without error.
+ *
+ * Three signals are folded into one RGB triple, in priority order:
+ *   - who built it (lineage hue), because that is the question a spectator cannot otherwise answer
+ *     without clicking;
+ *   - what it is (pattern colour), as a minority term so two builds by one lineage still differ;
+ *   - what condition it is in (integrity), as brightness, so a ruin visibly dims.
+ */
+export function structureTint(
+  structure: Pick<StructureDto, 'pattern' | 'integrity' | 'createdByLineageHue'>,
+): [number, number, number] {
+  const [pr, pg, pb] = PATTERN_COLOUR[structure.pattern];
+  const hue = structure.createdByLineageHue;
+  // A reaped lineage omits the hue entirely; fall back to the pattern rather than to black, which
+  // would read as a rendering fault instead of as an unknown builder.
+  const [lr, lg, lb] = hue === undefined ? [pr, pg, pb] : lineageTint(hue);
+  const w = hue === undefined ? 0 : LINEAGE_TINT_WEIGHT;
+  const shade = 0.4 + 0.6 * (structure.integrity / 1000);
+  return [(pr + (lr - pr) * w) * shade, (pg + (lg - pg) * w) * shade, (pb + (lb - pb) * w) * shade];
+}
 
 export interface StructureRendererHandle {
   update(structures: readonly StructureDto[]): void;
@@ -58,7 +115,10 @@ export function createStructureRenderer(scene: Scene): StructureRendererHandle {
     const mesh = buildStructureMesh(scene, pattern);
     const material = new PBRMetallicRoughnessMaterial(`structureMaterial-${pattern}`, scene);
     const [r, g, b] = PATTERN_COLOUR[pattern];
-    material.baseColor = new Color3(r, g, b);
+    // White base, because the per-instance colour carries the builder's lineage: a shared material
+    // colour would multiply into it and mute exactly the signal it is there to show. Pattern stays
+    // legible through the silhouette, which is what `buildStructureMesh` varies.
+    material.baseColor = new Color3(1, 1, 1);
     material.metallic = 0.06;
     material.roughness = 0.78;
     if (pattern === 'beacon') material.emissiveColor = new Color3(r, g, b).scale(0.55);
@@ -107,8 +167,8 @@ export function createStructureRenderer(scene: Scene): StructureRendererHandle {
           new Vector3(x, y, z),
         );
         matrix.copyToArray(matrices, matrices.length);
-        const shade = 0.4 + 0.6 * integrity;
-        colours.push(shade, shade, shade, 1);
+        const [r, g, b] = structureTint(structure);
+        colours.push(r, g, b, 1);
         ids.push(structure.id);
       }
 
