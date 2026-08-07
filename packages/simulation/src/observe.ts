@@ -93,6 +93,7 @@ export function observe(
     speedCuPerTick: p.speedCuPerTick,
     moveCostPer100Cu: p.moveCostPer100Cu,
     perceptionRadiusCu: radius,
+    signalRadiusCu: p.signalRadiusCu,
   };
 
   const light = ambientLightPerMille(draft.world.tick, draft.world.calendar);

@@ -84,6 +84,15 @@ export interface ObservedSelf {
    */
   readonly moveCostPer100Cu: number;
   readonly perceptionRadiusCu: number;
+  /**
+   * How far this organism's own voice carries at full intensity, in `cu`.
+   *
+   * Perception and reach are independent evolved properties — a body can see further than it
+   * can be heard, or the reverse. Teaching only transmits to a listener standing inside this
+   * radius, so without it an organism cannot tell an audience from a bystander and must call
+   * out blind, which is how culture failed to spread at all.
+   */
+  readonly signalRadiusCu: number;
 }
 
 export interface ObservedOrganism {
@@ -271,6 +280,7 @@ const observedSelfSchema = z.object({
   speedCuPerTick: z.number().finite(),
   moveCostPer100Cu: z.number().finite(),
   perceptionRadiusCu: z.number().finite(),
+  signalRadiusCu: z.number().finite(),
 });
 
 export const ObservationSchema = z.object({

@@ -44,6 +44,7 @@ function anObservation(): Observation {
       speedCuPerTick: 1.2,
       moveCostPer100Cu: 4,
       perceptionRadiusCu: 14,
+      signalRadiusCu: 20,
     },
     environment: {
       biome: 'shore',

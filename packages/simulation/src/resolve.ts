@@ -672,6 +672,7 @@ function applyInspect(
     for (const component of structure.components) {
       learnMaterial(ctx, organism.agentId, component.materialId);
     }
+    learnRecipesFromStructure(ctx, organism, phenotype, structure);
     rememberStructure(ctx, organism, structure);
     ctx.draft.structures.set(structure.id, {
       ...structure,
@@ -950,6 +951,71 @@ function learnRecipe(
 }
 
 export { learnRecipe, learnMaterial, learnStructure };
+
+/**
+ * Reads the recipes for a construction's composite components out of the construction itself.
+ *
+ * This is the world's durable channel for cultural transmission, and the one the rest of the
+ * simulation was already built around: `observe` grants structures a long-range landmark bonus
+ * expressly so "knowledge could never cross a lineage boundary" stops being true, and the
+ * heuristic's inspect branch is documented as "how knowledge crosses a lineage boundary". Both
+ * were correct about the intent and neither ever transferred a recipe, because inspection learned
+ * a structure's *materials* without ever learning how any of them were made — and a composite
+ * material cannot be gathered, only combined, so its id alone is close to useless.
+ *
+ * Teaching by signal cannot carry this load on its own. Measured over 600 ticks, an organism saw
+ * any non-kin organism at all on 0.54% of its turns on one trajectory and on *none* of 47,067
+ * turns on another: lineages settle apart and mostly never meet. A building does not have to be
+ * met. It stands for over a thousand ticks after its builder is dead, stays legible at landmark
+ * range, and so lets knowledge travel across both distance and time — which is what distinguishes
+ * culture from a conversation.
+ *
+ * A composite's ingredient list *is* its recipe, so the artefact genuinely carries the knowledge
+ * rather than the reader being handed it. Memory is required: an organism that cannot retain
+ * anything cannot carry a recipe home, the same condition `propagateKnowledge` places on a
+ * listener.
+ */
+function learnRecipesFromStructure(
+  ctx: ResolutionContext,
+  organism: Organism,
+  phenotype: Phenotype,
+  structure: Structure,
+): void {
+  if (phenotype.memorySlots < 1) return;
+  const agent = ctx.draft.agents.get(organism.agentId);
+  if (!agent) return;
+
+  const known = new Set(agent.knowledge.recipes.map((r) => r.key));
+  for (const component of structure.components) {
+    const definition = ctx.draft.materials.get(component.materialId);
+    const derivedFrom = definition?.derivedFrom;
+    if (!definition || !derivedFrom || derivedFrom.length === 0) continue;
+    const key = deriveRecipeKey(derivedFrom);
+    if (known.has(key)) continue;
+    known.add(key);
+    learnRecipe(
+      ctx,
+      organism.agentId,
+      key,
+      definition.label,
+      derivedFrom,
+      structure.createdByLineageId,
+    );
+    // Attributed to the builder, exactly as a taught recipe is attributed to its teacher, so
+    // the origin of a piece of knowledge reads the same however it travelled.
+    ctx.events.emit('knowledgeShared', organism.regionId, {
+      summary: `${organism.lineageId} learned ${definition.label} from ${structure.label}`,
+      agentId: structure.createdByAgentId,
+      lineageId: structure.createdByLineageId,
+      organismId: organism.id,
+      payload: {
+        recipeKey: key,
+        recipeLabel: definition.label,
+        toLineageIds: [organism.lineageId],
+      },
+    });
+  }
+}
 
 function rememberStructure(ctx: ResolutionContext, organism: Organism, structure: Structure): void {
   const phenotype = derivePhenotype(organism.genotype);
