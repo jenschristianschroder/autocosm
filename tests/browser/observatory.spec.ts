@@ -53,8 +53,9 @@ test('an observer can watch the world, author a lineage, and offer it a goal', a
   await expect(page.getByRole('alert').filter({ hasText: 'could not be drawn' })).toHaveCount(0);
 
   const box = await canvas.boundingBox();
-  expect(box?.width ?? 0).toBeGreaterThan(200);
-  expect(box?.height ?? 0).toBeGreaterThan(200);
+  if (box === null) throw new Error('the canvas has no layout box, so the renderer never mounted');
+  expect(box.width).toBeGreaterThan(200);
+  expect(box.height).toBeGreaterThan(200);
 
   // Positive proof that frames are being produced: the fps counter is only ever fed from
   // inside the render loop, so a backend + fps reading cannot appear on a dead scene.
@@ -87,6 +88,56 @@ test('an observer can watch the world, author a lineage, and offer it a goal', a
   await inspector.getByRole('button', { name: 'View lineage' }).click();
   await expect(page.locator('.panel--lineage')).toBeVisible({ timeout: 30_000 });
   await page.locator('.panel--lineage').getByRole('button', { name: 'Close' }).click();
+
+  /* ------------------------------------------------------------------- clock */
+
+  // The time of day is read from the snapshot's authoritative `dayPhasePerMille`, so a clock that
+  // renders at all proves the field survived the whole path from simulation to pixel. Asserting
+  // the phase name as well as the digits means a clock stuck at one phase forever still fails.
+  const clock = page.locator('.statusbar__clock');
+  await expect(clock).toBeVisible({ timeout: 30_000 });
+  await expect(clock.locator('.statusbar__time')).toHaveText(/^\d{2}:\d{2}$/u);
+  await expect(clock.locator('.statusbar__phase')).toContainText(
+    /night|dawn|morning|midday|afternoon|dusk/iu,
+  );
+  // The phase modifier class is what colours it, and it is derived, not hard-coded.
+  await expect(clock).toHaveClass(/statusbar__clock--[a-z]+/u);
+
+  /* --------------------------------------------------------- picking the world */
+
+  // Clicking the world is the whole of G3, and it was previously untested — this spec passed
+  // before picking existed at all.
+  //
+  // Two assertions, because they fail for different reasons. The cursor proves the pointer
+  // observable is attached and running its pick: hovering sets 'pointer' over an entity and
+  // 'crosshair' over everything else, so it cannot stay at the stylesheet's default unless the
+  // handler is gone. The click then proves the rest of the chain — pick -> resolve -> selection
+  // -> panel — by landing on terrain, which is the branch that yields a region.
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height * 0.6);
+  await expect
+    .poll(async () => canvas.evaluate((node) => node.style.cursor), { timeout: 10_000 })
+    .toMatch(/^(pointer|crosshair)$/u);
+
+  const ground = page.locator('.panel--inspector');
+
+  // Where the horizon sits depends on where the camera settled, so walk down the view rather than
+  // assuming one point is ground. A miss deselects, so a wrong guess is visible, not silent.
+  let region = false;
+  for (const fraction of [0.6, 0.72, 0.84]) {
+    await page.mouse.click(box.x + box.width / 2, box.y + box.height * fraction);
+    region = await ground
+      .getByText('Mean elevation')
+      .waitFor({ state: 'visible', timeout: 4000 })
+      .then(
+        () => true,
+        () => false,
+      );
+    if (region) break;
+  }
+  expect(region, 'clicking the terrain never resolved to a region').toBe(true);
+
+  // Selection is inspection only. Picking must never offer a way to act on what was picked.
+  await expect(ground.getByRole('button', { name: /move|feed|harvest|build/iu })).toHaveCount(0);
 
   /* ------------------------------------------------------------- field guide */
 
