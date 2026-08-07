@@ -12,6 +12,7 @@ import type {
 import type { AgentActionType, RejectionReason } from './actions.js';
 import type { DeathCause, PressureKind, SignalChannel } from './entities.js';
 import type { StructureFunctionId, StructurePattern } from './structures.js';
+import type { TraitId } from './traits.js';
 import type { TickIndex } from './units.js';
 
 /**
@@ -48,7 +49,8 @@ export type WorldEventKind =
   | 'decisionRequested'
   | 'decisionResolved'
   | 'actionRejected'
-  | 'lineageExtinct';
+  | 'lineageExtinct'
+  | 'lineageFounded';
 
 export interface WorldEventBase {
   readonly id: EventId;
@@ -137,6 +139,16 @@ export interface EventPayloads {
   };
   actionRejected: { readonly actionType: AgentActionType; readonly reason: RejectionReason };
   lineageExtinct: { readonly generations: number; readonly lifespanTicks: number };
+  /**
+   * A lineage divided: a newborn drifted far enough from its lineage's mean genome to found one
+   * of its own. `divergence` is the mean absolute genome distance that triggered it, and
+   * `traitId` the trait that drifted furthest — which is what the new lineage is named for.
+   */
+  lineageFounded: {
+    readonly parentLineageId: string;
+    readonly divergence: number;
+    readonly traitId: TraitId;
+  };
 }
 
 export type WorldEvent = {

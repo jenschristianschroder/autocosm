@@ -297,6 +297,7 @@ export function generateWorld(options: GenerateWorldOptions): WorldState {
       deaths: 0,
       livingCount: archetype.founders,
       meanGenotype: genotype,
+      foundingGenotype: genotype,
     });
 
     for (let i = 0; i < archetype.founders; i += 1) {

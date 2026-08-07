@@ -202,6 +202,16 @@ export interface Lineage {
   readonly livingCount: number;
   /** Running mean genome across living members, for lineage-level presentation. */
   readonly meanGenotype: Genotype;
+  /**
+   * The genome this lineage started from. Fixed for life.
+   *
+   * Drift is measured against this rather than against `meanGenotype`, because the mean tracks
+   * the living population and therefore chases it: measured over 3000 ticks, a newborn sits a
+   * flat ~10 from its lineage mean no matter how long the world has run, while distance from the
+   * founding genome grows steadily past 50. Only a fixed reference can register that a lineage
+   * has become a different kind of thing.
+   */
+  readonly foundingGenotype: Genotype;
   readonly extinctAtTick?: TickIndex;
 }
 

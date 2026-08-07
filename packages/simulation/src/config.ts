@@ -66,6 +66,27 @@ export interface SimulationConfig {
   readonly interactionRadiusCu: number;
   /** Maximum material units an organism may carry. */
   readonly inventoryCapacity: number;
+  /**
+   * Hard ceiling on lineages that have at least one living member.
+   *
+   * Counts the living, like `maxOrganisms` and for the same reason: a cumulative count would
+   * permanently stop a world diversifying once this many lineages had ever existed. The bound
+   * exists because every lineage competes for the same fixed `maxDecisionsPerTick`, so an
+   * unbounded split rate would starve them all of cognition rather than enrich the world.
+   */
+  readonly maxActiveLineages: number;
+  /**
+   * Mean absolute genome distance from its lineage's *founding* genome at which a newborn founds
+   * its own lineage, on the 0-1000 trait scale.
+   */
+  readonly speciationDivergence: number;
+  /**
+   * Living members a lineage needs before it can bud.
+   *
+   * Keeps a split a sign of success rather than of collapse: without it a lineage down to its
+   * last pair would shed splinters that inherit its predicament and immediately die too.
+   */
+  readonly speciationMinParentPopulation: number;
 }
 
 export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = Object.freeze({
@@ -94,6 +115,13 @@ export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = Object.freeze({
   maxOrganismsProcessedPerTick: 600,
   interactionRadiusCu: 420,
   inventoryCapacity: 240,
+  maxActiveLineages: 16,
+  // Measured drift from the founding genome over 3000 ticks, three seeds: 19->43, 22->56, 14->44,
+  // rising steadily throughout. Against the running mean the same births never exceeded 27
+  // (median 9), so any threshold above that is unreachable by construction — the mean chases its
+  // own population. 40 sits inside the observed drift range without being reached early.
+  speciationDivergence: 40,
+  speciationMinParentPopulation: 6,
 });
 
 /** Merge a partial override over the defaults, keeping every field present and bounded. */

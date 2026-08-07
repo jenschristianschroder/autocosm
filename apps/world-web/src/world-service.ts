@@ -183,6 +183,9 @@ export class WorldService {
       deaths: 0,
       livingCount: 0,
       meanGenotype: { ...genotype },
+      // Explicit rather than relying on the load-time fallback: a spectator's lineage starts
+      // measuring drift from the genome it was authored with.
+      foundingGenotype: { ...genotype },
     };
 
     await this.#repo.agents.put(agent);

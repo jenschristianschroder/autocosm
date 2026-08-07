@@ -199,4 +199,24 @@ describe('world persistence projection', () => {
     };
     expect(() => fromRecords(corrupted)).toThrow();
   });
+
+  it('loads a lineage persisted before drift was tracked', () => {
+    // The exact shape of the outage in `9ebfbe3`: adding a *required* field to a record schema
+    // rejects every row already in production and takes the world down with a 500. A lineage
+    // written before `foundingGenotype` existed must still load, anchored to where it stands now.
+    const bundle = toRecords(generateWorld({ seed: SEED, worldId: 'w-persist' }));
+    const legacy: typeof bundle = {
+      ...bundle,
+      lineages: bundle.lineages.map((lineage) => {
+        const { foundingGenotype: _dropped, ...rest } = lineage;
+        return rest;
+      }),
+    };
+
+    const restored = fromRecords(legacy);
+    expect(restored.lineages.size).toBe(bundle.lineages.length);
+    for (const lineage of restored.lineages.values()) {
+      expect(lineage.foundingGenotype).toStrictEqual(lineage.meanGenotype);
+    }
+  });
 });

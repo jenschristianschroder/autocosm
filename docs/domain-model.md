@@ -295,24 +295,56 @@ Reproduction is the only heritable channel.
    the per-mille range regardless of seed or generation depth.
 4. **Lineage.** The offspring joins the parent's lineage and gets a `LineageNode` recording parent,
    generation and birth tick. `organismBorn` carries the generation number.
-5. **Identity survives.** The _agent_ persists through descendants. When an individual organism
+5. **Speciation.** If the offspring's genotype has drifted far enough from its lineage's _founding_
+   genome, it founds a new lineage of its own instead — see below.
+6. **Identity survives.** The _agent_ persists through descendants. When an individual organism
    dies, the agent continues in its living descendants. `lineageExtinct` fires only when the last
    organism of a lineage dies — and it is genuinely final.
 
 `mutability` itself is heritable and suppresses `longevity`. A lineage that evolves high mutability
 adapts faster and dies younger, which is a real evolutionary tradeoff rather than a dial.
 
+### Speciation
+
+Before the change that introduced it, lineage count was a **strict ratchet that only ever fell**:
+worldgen created the founders and nothing in the simulation ever created another, so every extinction
+was permanent loss. Measured over 3000 ticks, seeded worlds decayed 8 → 2 active lineages, and the
+deployed world had reached a single lineage with nine extinct by tick 5774. Cross-lineage cultural
+transmission was not merely rare there, it was definitionally impossible.
+
+A newborn founds its own lineage when three gates pass together (`speciation.ts`):
+
+1. Its genotype diverges from `parentLineage.foundingGenotype` by at least
+   `speciationDivergence` — mean absolute per-trait difference on the 0–1000 scale.
+2. The parent lineage holds at least `speciationMinParentPopulation` living members, so a
+   collapsing lineage splits rather than survives.
+3. Fewer than `maxActiveLineages` lineages currently hold living members.
+
+**Divergence is measured against the founding genome, never the running mean.** `updateLineages`
+recomputes `meanGenotype` from living members every tick, so the mean follows its own population: a
+newborn sits a flat p50 = 9 / max = 27 from it whether the world has run 500 ticks or 3000, while
+distance from a fixed founding genome grows steadily to 43–56 over the same span. A mean-relative
+threshold is therefore unreachable at every point in the space — the same defect shape as
+`decayPerTick` promising permanence. `meanGenotype` stays presentation-only.
+
+A splinter gets its **own agent**, deep-copying the parent's knowledge so culture passes vertically
+and then diverges. `maxDecisionsPerTick` is a global cap, so additional agents cost no model spend.
+Ids derive from the child organism id, which is already deterministic in `(worldId, tick, ordinal)`,
+so replay reconstructs the same lineage tree. The splinter is named for its furthest-drifted trait —
+`Mending Grazers`, `Warded Hunters` — so the reason for the split is legible in the name.
+
 ---
 
 ## 10. Events
 
-23 event kinds form the append-only world history:
+26 event kinds form the append-only world history:
 
 `agentCreated`, `organismBorn`, `organismDied`, `organismMigrated`, `organismFed`,
 `organismAttacked`, `energyShared`, `signalEmitted`, `traitExpressed`, `materialDiscovered`,
-`materialCombined`, `structureBuilt`, `structureUsed`, `structureDamaged`, `structureRepurposed`,
-`structureCollapsed`, `knowledgeShared`, `goalSubmitted`, `goalConsidered`, `environmentalPressure`,
-`decisionRequested`, `decisionResolved`, `actionRejected`, `lineageExtinct`.
+`materialCombined`, `structureBuilt`, `structureUsed`, `structureDamaged`, `structureRepaired`,
+`structureRepurposed`, `structureCollapsed`, `knowledgeShared`, `goalSubmitted`, `goalConsidered`,
+`environmentalPressure`, `decisionRequested`, `decisionResolved`, `actionRejected`,
+`lineageExtinct`, `lineageFounded`.
 
 Every event carries `id`, `version`, `worldId`, `regionId`, `tick`, `ordinal`, `kind`, an optional
 `agentId` / `lineageId` / `organismId`, optional `causationId` / `correlationId`, a `summary` capped

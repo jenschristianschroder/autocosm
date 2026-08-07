@@ -2,6 +2,8 @@ import {
   Prng,
   TRAIT_CATALOGUE,
   TRAIT_IDS,
+  asAgentId,
+  asLineageId,
   asOrganismId,
   clampPerMille,
   complexityScore,
@@ -11,7 +13,9 @@ import {
   normaliseGenotype,
   regionIdOf,
   scaleByPerMille,
+  type Agent,
   type Genotype,
+  type Lineage,
   type Organism,
   type TraitId,
 } from '@autocosm/domain';
@@ -20,6 +24,7 @@ import type { EventSink } from './events.js';
 import type { EnergyLedger } from './resolve.js';
 import type { WorldDraft } from './state.js';
 import { countLivingOrganisms } from './state.js';
+import { countActiveLineages, evaluateSpeciation, splinterName } from './speciation.js';
 
 /**
  * Reproduction, mutation and inheritance.
@@ -65,6 +70,103 @@ export interface ReproduceArgs {
   readonly ordinal: number;
 }
 
+interface SplinterArgs {
+  readonly draft: WorldDraft;
+  readonly config: SimulationConfig;
+  readonly parent: Organism;
+  readonly childGenotype: Genotype;
+  readonly childId: string;
+}
+
+interface Splinter {
+  readonly agent: Agent;
+  readonly lineage: Lineage;
+  readonly divergence: number;
+  readonly trait: TraitId;
+}
+
+/**
+ * Give a sufficiently divergent newborn a lineage and an agent of its own.
+ *
+ * Writes both into the draft and returns them, or returns `null` if the newborn is still its
+ * parent's kind. The daughter agent inherits a *copy* of its parent's knowledge: culture passes
+ * vertically at the moment of the split, exactly as it would to any other offspring, and the two
+ * bodies of knowledge then diverge independently. Copying rather than sharing is the point — a
+ * shared reference would make the two lineages permanently identical culturally, so nothing
+ * could ever be learned across the boundary.
+ *
+ * Identifiers derive from the child's own id, which is already deterministic in world, tick and
+ * ordinal, so a replay reconstructs the same lineage tree.
+ */
+function foundSplinterLineage(args: SplinterArgs): Splinter | null {
+  const { draft, config, parent } = args;
+  const parentLineage = draft.lineages.get(parent.lineageId);
+  const parentAgent = draft.agents.get(parent.agentId);
+  if (!parentLineage || !parentAgent) return null;
+
+  const verdict = evaluateSpeciation({
+    childGenotype: args.childGenotype,
+    parentLineage,
+    activeLineages: countActiveLineages(draft.lineages),
+    maxActiveLineages: config.maxActiveLineages,
+    divergenceThreshold: config.speciationDivergence,
+    minParentPopulation: config.speciationMinParentPopulation,
+  });
+  if (!verdict.splits) return null;
+
+  const suffix = args.childId.slice(3);
+  const lineageId = asLineageId(`ln-${suffix}`);
+  const agentId = asAgentId(`ag-${suffix}`);
+  if (draft.lineages.has(lineageId) || draft.agents.has(agentId)) return null;
+
+  const name = splinterName(parentLineage.name, verdict.trait);
+
+  const agent: Agent = {
+    id: agentId,
+    worldId: parentAgent.worldId,
+    lineageId,
+    name,
+    createdByCreatorId: parentAgent.createdByCreatorId,
+    createdAtTick: draft.world.tick,
+    status: 'active',
+    // Disposition is inherited: a splinter is a divergent body, not a different mind.
+    drives: parentAgent.drives,
+    temperament: parentAgent.temperament,
+    habitat: parentAgent.habitat,
+    aspiration: parentAgent.aspiration,
+    // A deep copy, so learning after the split belongs to one lineage only.
+    knowledge: {
+      knownMaterialIds: [...parentAgent.knowledge.knownMaterialIds],
+      recipes: parentAgent.knowledge.recipes.map((recipe) => ({ ...recipe })),
+      knownStructureIds: [...parentAgent.knowledge.knownStructureIds],
+    },
+    lastDecisionTick: draft.world.tick,
+    decisionCount: 0,
+    visualSeed: hashSeed('visual', lineageId) % 65_536,
+  };
+
+  const lineage: Lineage = {
+    id: lineageId,
+    worldId: parent.worldId,
+    agentId,
+    name,
+    foundedAtTick: draft.world.tick,
+    originRegionId: parent.regionId,
+    generations: 1,
+    births: 1,
+    deaths: 0,
+    livingCount: 1,
+    meanGenotype: args.childGenotype,
+    // The splinter's own clock starts here: drift is measured from what it was, not from what
+    // its parent was, so a daughter cannot immediately split again on inherited distance.
+    foundingGenotype: args.childGenotype,
+  };
+
+  draft.agents.set(agentId, agent);
+  draft.lineages.set(lineageId, lineage);
+  return { agent, lineage, divergence: verdict.divergence, trait: verdict.trait };
+}
+
 export function reproduce(args: ReproduceArgs): ReproductionOutcome {
   const { draft, config, parent } = args;
   const phenotype = derivePhenotype(parent.genotype);
@@ -105,11 +207,22 @@ export function reproduce(args: ReproduceArgs): ReproductionOutcome {
     parent.position.z + rng.nextRange(-offset, offset),
   );
 
+  // Does this newborn belong to its parent's kind, or has it become something else? Resolved
+  // before the child is constructed, because the answer decides which lineage and agent it
+  // carries for life.
+  const split = foundSplinterLineage({
+    draft,
+    config,
+    parent,
+    childGenotype,
+    childId,
+  });
+
   const child: Organism = {
     id: childId,
     worldId: parent.worldId,
-    agentId: parent.agentId,
-    lineageId: parent.lineageId,
+    agentId: split?.agent.id ?? parent.agentId,
+    lineageId: split?.lineage.id ?? parent.lineageId,
     regionId: regionIdOf(position),
     position,
     genotype: childGenotype,
@@ -142,7 +255,7 @@ export function reproduce(args: ReproduceArgs): ReproductionOutcome {
   });
 
   const lineage = draft.lineages.get(parent.lineageId);
-  if (lineage) {
+  if (lineage && !split) {
     draft.lineages.set(lineage.id, {
       ...lineage,
       births: lineage.births + 1,
@@ -158,6 +271,20 @@ export function reproduce(args: ReproduceArgs): ReproductionOutcome {
     lineageId: child.lineageId,
     payload: { parentOrganismId: parent.id, generation: child.generation },
   });
+
+  if (split) {
+    args.events.emit('lineageFounded', child.regionId, {
+      summary: `${split.lineage.name} diverged from ${lineage?.name ?? parent.lineageId}`,
+      organismId: child.id,
+      agentId: split.agent.id,
+      lineageId: split.lineage.id,
+      payload: {
+        parentLineageId: parent.lineageId,
+        divergence: split.divergence,
+        traitId: split.trait,
+      },
+    });
+  }
 
   return { child };
 }

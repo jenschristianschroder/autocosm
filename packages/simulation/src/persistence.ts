@@ -157,6 +157,7 @@ export function toRecords(state: WorldState): WorldRecordBundle {
       rv: RV,
       ...lineage,
       meanGenotype: { ...lineage.meanGenotype },
+      foundingGenotype: { ...lineage.foundingGenotype },
     })),
     lineageNodes: [...state.lineageNodes.values()].map((node) => ({ rv: RV, ...node })),
     organisms: [...state.organisms.values()].map((organism) => ({
@@ -284,7 +285,13 @@ export function fromRecords(bundle: WorldRecordBundle): WorldState {
   const lineages = new Map<LineageId, Lineage>();
   for (const raw of bundle.lineages) {
     const parsed = LineageRecordSchema.parse(raw);
-    lineages.set(branded<LineageId>(parsed.id), branded<Lineage>(strip(parsed)));
+    const lineage = branded<Lineage>(strip(parsed));
+    lineages.set(
+      branded<LineageId>(parsed.id),
+      // A lineage written before drift was tracked is anchored to where it stands now, so it
+      // begins accumulating from this moment rather than being rejected.
+      parsed.foundingGenotype ? lineage : { ...lineage, foundingGenotype: lineage.meanGenotype },
+    );
   }
 
   const lineageNodes = new Map<OrganismId, LineageNode>();

@@ -199,6 +199,12 @@ export const LineageRecordSchema = versioned({
   deaths: nonNegative,
   livingCount: nonNegative,
   meanGenotype: GenotypeRecordSchema,
+  /**
+   * Optional so lineages persisted before drift was tracked still load. A required field here
+   * would reject every lineage already in the world; on load an absent value defaults to the
+   * present mean, which starts the drift clock now instead of failing the read.
+   */
+  foundingGenotype: GenotypeRecordSchema.optional(),
   extinctAtTick: nonNegative.optional(),
 });
 
