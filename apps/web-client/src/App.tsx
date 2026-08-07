@@ -11,7 +11,7 @@ import { GlossaryPanel } from './components/GlossaryPanel';
 import { GoalDialog } from './components/GoalDialog';
 import { StatusBar } from './components/StatusBar';
 import { WorldNavigator } from './components/WorldNavigator';
-import type { Selection } from './types';
+import type { PickHit, Selection } from './types';
 
 /**
  * Observatory shell.
@@ -39,6 +39,15 @@ export function App(): JSX.Element {
     setSelection(next);
     if (next.kind === 'none') setFollowing(false);
   }, []);
+
+  // Clicking the world inspects it. Following is deliberately not started by a click: engaging the
+  // camera on every glance would take control away from an observer who is trying to look around.
+  const pick = useCallback(
+    (hit: PickHit | undefined) => {
+      select(hit ?? { kind: 'none' });
+    },
+    [select],
+  );
 
   useEffect(() => {
     if (toast === undefined) return;
@@ -125,12 +134,14 @@ export function App(): JSX.Element {
         <div className="stage">
           <Viewport
             snapshot={feed.snapshot}
+            regions={feed.meta?.regions}
             selection={selection}
             following={following}
             reducedMotion={reducedMotion}
             pollIntervalMs={feed.pollIntervalMs}
             onBackend={setBackend}
             onFps={setFps}
+            onPick={pick}
           />
 
           {feed.connection === 'coldStart' && feed.snapshot === undefined && (
@@ -183,6 +194,8 @@ export function App(): JSX.Element {
           <InspectorPanel
             selection={selection}
             snapshot={feed.snapshot}
+            regions={feed.meta?.regions}
+            materials={feed.meta?.materials}
             following={following}
             onToggleFollow={() => setFollowing((value) => !value)}
             onSelect={select}
@@ -211,6 +224,7 @@ export function App(): JSX.Element {
 
       <StatusBar
         meta={feed.meta}
+        snapshot={feed.snapshot}
         connection={feed.connection}
         errorMessage={feed.errorMessage}
         lastChangeAt={feed.lastChangeAt}

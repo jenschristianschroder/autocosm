@@ -1,11 +1,14 @@
 import { Scene } from '@babylonjs/core/scene';
 import type { Vector3 } from '@babylonjs/core/Maths/math.vector';
+import { PointerEventTypes } from '@babylonjs/core/Events/pointerEvents';
+import type { PickingInfo } from '@babylonjs/core/Collisions/pickingInfo';
+import type { AbstractMesh } from '@babylonjs/core/Meshes/abstractMesh';
 import { DefaultRenderingPipeline } from '@babylonjs/core/PostProcesses/RenderPipeline/Pipelines/defaultRenderingPipeline';
 import { ImageProcessingConfiguration } from '@babylonjs/core/Materials/imageProcessingConfiguration';
 import type { AbstractEngine } from '@babylonjs/core/Engines/abstractEngine';
 import '@babylonjs/core/Rendering/prePassRendererSceneComponent';
 import '@babylonjs/core/Culling/ray';
-import type { SnapshotResponse, Selection } from '../types';
+import type { SnapshotResponse, RegionDto, Selection, PickHit } from '../types';
 import { createEngine, type RendererBackend } from './engine';
 import { createEnvironment, type EnvironmentHandle } from './environment';
 import { buildTerrain, type TerrainHandle } from './terrain';
@@ -17,6 +20,7 @@ import {
   type StructureRendererHandle,
 } from './props';
 import { createSpectatorCamera } from './camera';
+import { pickKindOf } from './picking';
 
 /**
  * The observatory scene.
@@ -38,11 +42,21 @@ export interface WorldSceneOptions {
    */
   readonly snapshotIntervalMs: () => number;
   readonly onFps: (fps: number) => void;
+  /**
+   * Called when the observer clicks something in the world. This is inspection only — the scene
+   * reports what was clicked and never acts on it.
+   */
+  readonly onPick: (hit: PickHit | undefined) => void;
 }
 
 export interface WorldSceneHandle {
   readonly backend: RendererBackend;
   applySnapshot(snapshot: SnapshotResponse): void;
+  /**
+   * The full regional field from `/world`. Terrain drawn from a snapshot alone would be mostly
+   * invented, so this is what the mesh is really built from once it arrives.
+   */
+  setWorldRegions(regions: readonly RegionDto[]): void;
   setSelection(selection: Selection): void;
   setFollowing(following: boolean): void;
   frameWorld(): void;
@@ -50,16 +64,21 @@ export interface WorldSceneHandle {
   dispose(): void;
 }
 
+/** Hover picking exists only to show that something is clickable; 10 Hz is plenty for a cursor. */
+const HOVER_INTERVAL_MS = 100;
+
 export async function createWorldScene(options: WorldSceneOptions): Promise<WorldSceneHandle> {
   const { engine, backend } = await createEngine(options.canvas);
   const scene = new Scene(engine);
   scene.skipPointerMovePicking = true;
   scene.autoClear = true;
   scene.blockMaterialDirtyMechanism = true;
+  options.canvas.style.cursor = 'crosshair';
 
   const camera = createSpectatorCamera(scene, options.canvas);
-  // WebGL2 on integrated GPUs is where shadow maps hurt most; keep them for WebGPU only.
-  const environment: EnvironmentHandle = createEnvironment(scene, backend === 'webgpu');
+  // Shadows are what make the terrain read as solid ground rather than a painted sheet, so both
+  // backends get them; WebGL2 pays a smaller map instead of going without.
+  const environment: EnvironmentHandle = createEnvironment(scene, backend);
   const organisms: OrganismRendererHandle = createOrganismRenderer(scene);
   const structures: StructureRendererHandle = createStructureRenderer(scene);
   const resources: ResourceRendererHandle = createResourceRenderer(scene);
@@ -76,7 +95,8 @@ export async function createWorldScene(options: WorldSceneOptions): Promise<Worl
   pipeline.imageProcessing.exposure = 1.05;
 
   let terrain: TerrainHandle | undefined;
-  let terrainSeed: number | undefined;
+  let terrainKey: string | undefined;
+  let worldRegions: readonly RegionDto[] | undefined;
   let latest: SnapshotResponse | undefined;
   let receivedAt = 0;
   let selection: Selection = { kind: 'none' };
@@ -86,6 +106,63 @@ export async function createWorldScene(options: WorldSceneOptions): Promise<Worl
   let fpsFrames = 0;
 
   const groundHeight = (x: number, z: number): number => terrain?.heightAt(x, z) ?? 0;
+
+  /**
+   * Resolve a pick to a world entity.
+   *
+   * One traversal over everything pickable, so occlusion is respected: an organism standing behind
+   * a ridge cannot be clicked through it. The mesh tag says what kind of thing was drawn and the
+   * thin-instance index says which one, because every entity type is instanced.
+   */
+  function resolve(pick: PickingInfo | null): PickHit | undefined {
+    const mesh = pick?.pickedMesh;
+    if (!pick?.hit || !mesh) return undefined;
+    const kind = pickKindOf(mesh.metadata);
+    const index = pick.thinInstanceIndex;
+
+    if (kind === 'organism') {
+      const id = organisms.organismAt(mesh.name, index);
+      return id === undefined ? undefined : { kind: 'organism', id };
+    }
+    if (kind === 'structure') {
+      const id = structures.structureAt(mesh.name, index);
+      return id === undefined ? undefined : { kind: 'structure', id };
+    }
+    if (kind === 'resource') {
+      const id = resources.resourceAt(mesh.name, index);
+      return id === undefined ? undefined : { kind: 'resource', id };
+    }
+    if (kind === 'terrain' && pick.pickedPoint) {
+      const region = terrain?.regionAt(pick.pickedPoint.x, pick.pickedPoint.z);
+      return region ? { kind: 'region', id: region.id } : undefined;
+    }
+    return undefined;
+  }
+
+  const isEntity = (mesh: AbstractMesh): boolean => {
+    const kind = pickKindOf(mesh.metadata);
+    return kind !== undefined && kind !== 'terrain';
+  };
+
+  let lastHoverAt = 0;
+
+  scene.onPointerObservable.add((info) => {
+    // POINTERTAP rather than POINTERUP: Babylon suppresses it when the pointer was dragged, so
+    // looking around with the mouse never selects whatever happened to be under the cursor.
+    if (info.type === PointerEventTypes.POINTERTAP) {
+      options.onPick(resolve(scene.pick(scene.pointerX, scene.pointerY)));
+      return;
+    }
+    if (info.type !== PointerEventTypes.POINTERMOVE) return;
+
+    // Hover only exists to show that the world is clickable, so it is throttled and skips the
+    // terrain mesh — 32k triangles is far too much to ray-test at pointer rate for a cursor.
+    const now = performance.now();
+    if (now - lastHoverAt < HOVER_INTERVAL_MS) return;
+    lastHoverAt = now;
+    const hover = scene.pick(scene.pointerX, scene.pointerY, isEntity);
+    options.canvas.style.cursor = hover?.hit ? 'pointer' : 'crosshair';
+  });
 
   engine.runRenderLoop(() => {
     const deltaSeconds = Math.min(0.25, engine.getDeltaTime() / 1000);
@@ -125,16 +202,34 @@ export async function createWorldScene(options: WorldSceneOptions): Promise<Worl
     return undefined;
   }
 
-  function applySnapshot(snapshot: SnapshotResponse): void {
-    // Terrain is a function of the world seed and the regional field; both are stable for a world,
-    // so it is built once and never rebuilt on every poll.
-    if (terrainSeed !== snapshot.seed) {
-      terrain?.dispose();
-      terrain = buildTerrain(scene, snapshot.regions, snapshot.seed);
-      terrainSeed = snapshot.seed;
-      environment.addShadowCaster(terrain.mesh);
-    }
+  /**
+   * Builds or rebuilds the terrain mesh. Keyed on the seed *and* the regional coverage, because
+   * `/world` and `/snapshot` arrive independently: whichever lands first draws the ground, and the
+   * arrival of the full field upgrades it exactly once.
+   */
+  function ensureTerrain(regions: readonly RegionDto[], seed: number): void {
+    const key = `${seed}:${regions.length}`;
+    if (terrainKey === key) return;
+    terrain?.dispose();
+    terrain = buildTerrain(scene, regions, seed);
+    terrainKey = key;
+    environment.addShadowCaster(terrain.mesh);
+    // Water is graded against the ground beneath it, so it follows every terrain rebuild.
+    const ground = terrain;
+    environment.setDepthField((x, z) => ground.heightAt(x, z));
+  }
 
+  function setWorldRegions(regions: readonly RegionDto[]): void {
+    worldRegions = regions;
+    if (latest) ensureTerrain(regions, latest.seed);
+  }
+
+  function applySnapshot(snapshot: SnapshotResponse): void {
+    // Prefer the full regional field. A snapshot carries only the observed neighbourhood — 9 of 64
+    // regions — and the missing 86% would be filled with a flat constant, drawing most of the world
+    // as featureless plate. Snapshot regions are the fallback for the window before `/world` lands
+    // or if it fails outright.
+    ensureTerrain(worldRegions ?? snapshot.regions, snapshot.seed);
     environment.setDaylight(
       snapshot.dayPhasePerMille,
       snapshot.lightPerMille,
@@ -154,6 +249,7 @@ export async function createWorldScene(options: WorldSceneOptions): Promise<Worl
   return {
     backend,
     applySnapshot,
+    setWorldRegions,
     setSelection(next) {
       selection = next;
       if (next.kind === 'none') following = false;

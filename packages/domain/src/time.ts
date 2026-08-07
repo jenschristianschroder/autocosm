@@ -76,6 +76,56 @@ export function ambientLightPerMille(tick: TickIndex, calendar: WorldCalendar): 
   return Math.trunc(clamp(60 + (daylight * 940) / 1000, 0, 1000));
 }
 
+/** Named stretch of the day, derived from the day phase so a reading and its name cannot disagree. */
+export type DayPhaseName = 'night' | 'dawn' | 'morning' | 'midday' | 'afternoon' | 'dusk';
+
+export interface DayPhaseDescription {
+  /** Minutes since midnight, 0..1439. */
+  readonly minuteOfDay: number;
+  /** 24-hour reading such as `06:15`. */
+  readonly clock: string;
+  readonly name: DayPhaseName;
+}
+
+/** Day number a tick falls in, counting from the world's first day. */
+export function dayOfTick(tick: TickIndex, calendar: WorldCalendar): number {
+  const period = Math.max(1, toInt(calendar.ticksPerDay));
+  return Math.floor(Math.max(0, toInt(tick)) / period);
+}
+
+/**
+ * Render a day phase as a clock reading.
+ *
+ * Takes the phase rather than the tick on purpose: the phase is authoritative and travels in the
+ * snapshot, so a caller displaying it can never drift from the daylight the simulation actually
+ * used. Phase 0 is midnight and phase 500 is noon, matching the light curve above.
+ */
+export function describeDayPhase(dayPhasePerMille: number): DayPhaseDescription {
+  const phase = clamp(toInt(dayPhasePerMille), 0, 1000);
+  const minuteOfDay = Math.min(1439, Math.trunc((phase * 1440) / 1000));
+  const hour = Math.trunc(minuteOfDay / 60);
+  const minute = minuteOfDay % 60;
+  return {
+    minuteOfDay,
+    clock: `${pad2(hour)}:${pad2(minute)}`,
+    name: dayPhaseName(hour),
+  };
+}
+
+function dayPhaseName(hour: number): DayPhaseName {
+  if (hour < 4) return 'night';
+  if (hour < 7) return 'dawn';
+  if (hour < 11) return 'morning';
+  if (hour < 13) return 'midday';
+  if (hour < 17) return 'afternoon';
+  if (hour < 20) return 'dusk';
+  return 'night';
+}
+
+function pad2(value: number): string {
+  return String(value).padStart(2, '0');
+}
+
 /** Index of the pressure cycle a tick belongs to. Used to schedule environmental events. */
 export function pressureCycleIndex(tick: TickIndex, calendar: WorldCalendar): number {
   const period = Math.max(1, toInt(calendar.ticksPerPressureCycle));

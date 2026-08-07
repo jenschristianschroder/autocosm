@@ -917,6 +917,56 @@ textarea {
   font-variant-numeric: tabular-nums;
 }
 
+.statusbar__clock {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.1rem 0.55rem 0.1rem 0.4rem;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: default;
+}
+
+.statusbar__sun {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  transition:
+    background 600ms linear,
+    box-shadow 600ms linear;
+}
+
+.statusbar__time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.statusbar__phase {
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.statusbar__clock--night,
+.statusbar__clock--dusk {
+  border-color: rgba(120, 150, 210, 0.35);
+}
+
+.statusbar__clock--midday {
+  border-color: rgba(240, 208, 130, 0.45);
+}
+
+.statusbar__item--weather {
+  color: var(--warn);
+  cursor: default;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .statusbar__sun {
+    transition: none;
+  }
+}
+
 .statusbar__badge {
   padding: 0.05rem 0.45rem;
   border-radius: 999px;

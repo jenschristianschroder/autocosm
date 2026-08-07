@@ -23,7 +23,7 @@
     "lint:fix": "eslint . --fix",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "typecheck": "tsc --build tsconfig.build.json",
+    "typecheck": "tsc --build tsconfig.build.json && tsc -b apps/web-client/tsconfig.app.json",
     "typecheck:tests": "tsc -p tsconfig.tests.json",
     "test": "vitest run",
     "test:code": "vitest run --project domain --project simulation --project storage --project agent-runtime --project observability --project world-web --project world-tick --project agent-think --project world-admin --project web-client",

@@ -31,11 +31,13 @@ import {
   combineMaterials,
   complexityScore,
   dayPhasePerMille,
+  dayOfTick,
   decayPerTick,
   derivePhenotype,
   deriveMaterialName,
   deriveStructureFunctions,
   deriveVisual,
+  describeDayPhase,
   describeStructure,
   distance,
   effectiveTrait,
@@ -426,6 +428,51 @@ describe('logical time', () => {
     expect(
       ambientLightPerMille(DEFAULT_CALENDAR.ticksPerDay / 2, DEFAULT_CALENDAR),
     ).toBeGreaterThan(ambientLightPerMille(0, DEFAULT_CALENDAR));
+  });
+
+  it('reads the day phase as a clock, and the clock agrees with the light curve', () => {
+    // Phase is the authoritative value the snapshot carries, so the reading is derived from it
+    // rather than from the tick — a display that recomputed the phase could disagree with the
+    // daylight the simulation actually used.
+    expect(describeDayPhase(0).clock).toBe('00:00');
+    expect(describeDayPhase(500).clock).toBe('12:00');
+    expect(describeDayPhase(250).clock).toBe('06:00');
+    expect(describeDayPhase(750).clock).toBe('18:00');
+
+    expect(describeDayPhase(0).name).toBe('night');
+    expect(describeDayPhase(500).name).toBe('midday');
+    expect(describeDayPhase(250).name).toBe('dawn');
+    expect(describeDayPhase(750).name).toBe('dusk');
+
+    // The brightest named stretch must be the one the light curve actually peaks in, or the world
+    // would read "midday" while the simulation was running night-time photosynthesis.
+    let brightest = { light: -1, name: '' };
+    for (let tick = 0; tick < DEFAULT_CALENDAR.ticksPerDay; tick += 1) {
+      const light = ambientLightPerMille(tick, DEFAULT_CALENDAR);
+      const { name } = describeDayPhase(dayPhasePerMille(tick, DEFAULT_CALENDAR));
+      if (light > brightest.light) brightest = { light, name };
+    }
+    expect(brightest.name).toBe('midday');
+  });
+
+  it('keeps the clock inside a day for every reachable phase', () => {
+    for (let phase = 0; phase <= 1000; phase += 1) {
+      const { minuteOfDay, clock } = describeDayPhase(phase);
+      expect(minuteOfDay).toBeGreaterThanOrEqual(0);
+      expect(minuteOfDay).toBeLessThan(1440);
+      expect(clock).toMatch(/^([01]\d|2[0-3]):[0-5]\d$/);
+    }
+    // Out-of-range input is clamped rather than producing a nonsense reading such as `25:12`.
+    expect(describeDayPhase(-50).clock).toBe('00:00');
+    expect(describeDayPhase(5000).clock).toBe('23:59');
+  });
+
+  it('counts whole days from the first tick of the world', () => {
+    const { ticksPerDay } = DEFAULT_CALENDAR;
+    expect(dayOfTick(0, DEFAULT_CALENDAR)).toBe(0);
+    expect(dayOfTick(ticksPerDay - 1, DEFAULT_CALENDAR)).toBe(0);
+    expect(dayOfTick(ticksPerDay, DEFAULT_CALENDAR)).toBe(1);
+    expect(dayOfTick(ticksPerDay * 7 + 3, DEFAULT_CALENDAR)).toBe(7);
   });
 
   it('marks pressure boundaries once per cycle and never at tick zero', () => {

@@ -1,10 +1,14 @@
 import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
+import { MATERIAL_PROPERTY_IDS } from '@autocosm/domain';
 import { fetchAgent, fetchOrganism, fetchStructure } from '../api';
 import { lineageColour } from '../lineage-colour';
+import { regionCellOf } from '../region';
 import type {
   AgentDetailResponse,
+  MaterialDto,
   OrganismDetailResponse,
+  RegionDto,
   Selection,
   SnapshotResponse,
   StructureDetailResponse,
@@ -21,6 +25,12 @@ import type {
 export interface InspectorPanelProps {
   readonly selection: Selection;
   readonly snapshot: SnapshotResponse | undefined;
+  /**
+   * Every region in the world, from `/world`. The observer can click any ground the terrain draws,
+   * which is the whole world — wider than the snapshot's observed neighbourhood.
+   */
+  readonly regions: readonly RegionDto[] | undefined;
+  readonly materials: readonly MaterialDto[] | undefined;
   readonly following: boolean;
   readonly onToggleFollow: () => void;
   readonly onSelect: (selection: Selection) => void;
@@ -40,10 +50,17 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
     let cancelled = false;
     setError(undefined);
 
-    if (selection.kind === 'none') {
+    // Regions and resource nodes are already in the snapshot the client holds, so inspecting them
+    // costs no request. Only the three entities with a detail route are fetched.
+    if (
+      selection.kind !== 'organism' &&
+      selection.kind !== 'agent' &&
+      selection.kind !== 'structure'
+    ) {
       setAgent(undefined);
       setOrganism(undefined);
       setStructure(undefined);
+      setLoading(false);
       return;
     }
 
@@ -91,6 +108,117 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
         <p className="muted">
           Select a lineage or an organism to inspect it. You are an observer: you can look at
           anything and change nothing.
+        </p>
+      </aside>
+    );
+  }
+
+  if (selection.kind === 'region') {
+    // The snapshot's regions carry live biomass for the observed neighbourhood; the world meta
+    // carries all 64. Prefer the live one, fall back to meta so distant ground is still legible.
+    const region =
+      props.snapshot?.regions.find((r) => r.id === selection.id) ??
+      props.regions?.find((r) => r.id === selection.id);
+    if (!region) {
+      return (
+        <aside className="panel panel--inspector" aria-label="Inspector">
+          <h2>Ground</h2>
+          <p className="muted">That part of the world is outside the current view.</p>
+        </aside>
+      );
+    }
+    const nodes =
+      props.snapshot?.resources.filter(
+        (r) => regionCellOf(r.x) === region.col && regionCellOf(r.z) === region.row,
+      ) ?? [];
+
+    return (
+      <aside className="panel panel--inspector" aria-label="Inspector">
+        <header className="panel__header">
+          <h2>{BIOME_LABEL[region.biome] ?? region.biome}</h2>
+        </header>
+        <p className="muted small">{BIOME_SUMMARY[region.biome] ?? 'A region of the world.'}</p>
+        <dl className="facts">
+          <Fact label="Mean elevation" value={`${region.meanElevationCu} cu`} />
+          <Fact label="Under water" value={perMille(region.waterCoverage)} />
+          <Fact label="Base temperature" value={`${region.baseTemperature} m°`} />
+          <Fact label="Minerals" value={perMille(region.mineralRichness)} />
+          <Fact label="Biomass" value={`${region.biomass.toLocaleString()} mu`} />
+        </dl>
+
+        <h3>What grows here</h3>
+        {nodes.length === 0 ? (
+          <p className="muted">No resource node in this region is currently in view.</p>
+        ) : (
+          <ul className="chips">
+            {nodes.map((node) => (
+              <li key={node.id}>
+                <button
+                  type="button"
+                  className="chip chip--button"
+                  onClick={() => props.onSelect({ kind: 'resource', id: node.id })}
+                >
+                  {props.materials?.find((m) => m.id === node.materialId)?.label ?? node.materialId}{' '}
+                  · {node.quantity}
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+
+        <p className="muted small">
+          Elevation, temperature and mineral content are properties of the terrain itself. Biomass
+          regrows; minerals do not.
+        </p>
+      </aside>
+    );
+  }
+
+  if (selection.kind === 'resource') {
+    const node = props.snapshot?.resources.find((r) => r.id === selection.id);
+    if (!node) {
+      return (
+        <aside className="panel panel--inspector" aria-label="Inspector">
+          <h2>Resource node</h2>
+          <p className="muted">That node has been exhausted or is outside the current view.</p>
+        </aside>
+      );
+    }
+    const material = props.materials?.find((m) => m.id === node.materialId);
+    const share = node.capacity > 0 ? Math.round((node.quantity / node.capacity) * 1000) : 0;
+    return (
+      <aside className="panel panel--inspector" aria-label="Inspector">
+        <header className="panel__header">
+          <h2>{material?.label ?? node.materialId}</h2>
+          <FollowButton following={props.following} onToggle={props.onToggleFollow} />
+        </header>
+        {material?.subtitle !== undefined && <p className="muted small">{material.subtitle}</p>}
+        <dl className="facts">
+          <Fact label="Remaining" value={`${node.quantity} of ${node.capacity}`} />
+          <Fact label="Stocked" value={perMille(share)} />
+          <Fact label="Elevation" value={`${node.elevation} cu`} />
+          <Fact label="Position" value={`${node.x}, ${node.z}`} />
+        </dl>
+        {material && (
+          <>
+            <h3>Properties</h3>
+            <ul className="definitions">
+              {MATERIAL_PROPERTY_IDS.map((id) => (
+                <li key={id}>
+                  <strong>{humanise(id)}</strong>{' '}
+                  <span className="muted small">{perMille(material.properties[id] ?? 0)}</span>
+                </li>
+              ))}
+            </ul>
+            <p className="muted small">
+              {material.nutritionPerUnit > 0
+                ? `Edible: ${material.nutritionPerUnit} energy per unit.`
+                : 'Inedible.'}
+            </p>
+          </>
+        )}
+        <p className="muted small">
+          A node regrows only if the region supports it. Nothing here can be collected by you.
         </p>
       </aside>
     );
@@ -413,6 +541,24 @@ const ratio = (value: number, max: number): number =>
   max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
 
 const perMille = (value: number): string => `${(value / 10).toFixed(0)}%`;
+
+const BIOME_LABEL: Record<string, string> = {
+  abyss: 'Abyss',
+  shallows: 'Shallows',
+  shore: 'Shore',
+  plain: 'Plain',
+  highland: 'Highland',
+  ridge: 'Ridge',
+};
+
+const BIOME_SUMMARY: Record<string, string> = {
+  abyss: 'Deep water. Cold, dark and mineral-poor; almost nothing grows here.',
+  shallows: 'Shallow water over a submerged shelf. Light reaches the bottom.',
+  shore: 'The waterline. Where water and land meet, and where most life gathers.',
+  plain: 'Low open ground above the waterline. The most productive land.',
+  highland: 'Raised ground. Cooler, drier, and harder to cross.',
+  ridge: 'Exposed rock at the top of the world. Rich in minerals, poor in food.',
+};
 
 export function humanise(id: string): string {
   return id.replace(/([A-Z])/gu, ' $1').replace(/^./u, (c) => c.toUpperCase());

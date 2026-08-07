@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import type { JSX } from 'react';
-import type { Selection, SnapshotResponse } from '../types';
+import type { PickHit, RegionDto, Selection, SnapshotResponse } from '../types';
 import { createWorldScene, type WorldSceneHandle } from '../render/world-scene';
 
 /**
@@ -17,12 +17,18 @@ import { createWorldScene, type WorldSceneHandle } from '../render/world-scene';
 
 export interface ViewportProps {
   readonly snapshot: SnapshotResponse | undefined;
+  /**
+   * Every region in the world, from `/world`. A snapshot carries only the observed neighbourhood
+   * (9 of 64), so terrain built from it would be 86% invented filler — see `buildTerrain`.
+   */
+  readonly regions: readonly RegionDto[] | undefined;
   readonly selection: Selection;
   readonly following: boolean;
   readonly reducedMotion: boolean;
   readonly pollIntervalMs: number;
   readonly onBackend: (backend: string) => void;
   readonly onFps: (fps: number) => void;
+  readonly onPick: (hit: PickHit | undefined) => void;
 }
 
 export function Viewport(props: ViewportProps): JSX.Element {
@@ -36,9 +42,11 @@ export function Viewport(props: ViewportProps): JSX.Element {
   const intervalRef = useRef(props.pollIntervalMs);
   const backendRef = useRef(props.onBackend);
   const fpsRef = useRef(props.onFps);
+  const pickRef = useRef(props.onPick);
   intervalRef.current = props.pollIntervalMs;
   backendRef.current = props.onBackend;
   fpsRef.current = props.onFps;
+  pickRef.current = props.onPick;
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -50,6 +58,7 @@ export function Viewport(props: ViewportProps): JSX.Element {
       reducedMotion,
       snapshotIntervalMs: () => intervalRef.current,
       onFps: (fps) => fpsRef.current(fps),
+      onPick: (hit) => pickRef.current(hit),
     })
       .then((handle) => {
         if (disposed) {
@@ -75,6 +84,10 @@ export function Viewport(props: ViewportProps): JSX.Element {
   }, [reducedMotion]);
 
   useEffect(() => {
+    if (ready && props.regions) sceneRef.current?.setWorldRegions(props.regions);
+  }, [ready, props.regions]);
+
+  useEffect(() => {
     if (ready && props.snapshot) sceneRef.current?.applySnapshot(props.snapshot);
   }, [ready, props.snapshot]);
 
@@ -91,7 +104,7 @@ export function Viewport(props: ViewportProps): JSX.Element {
       <canvas
         ref={canvasRef}
         className="viewport__canvas"
-        aria-label="Three-dimensional view of the Autocosm world. Use W, A, S and D to move, Q and E to change altitude, and drag to look."
+        aria-label="Three-dimensional view of the Autocosm world. Use W, A, S and D to move, Q and E to change altitude, the scroll wheel to zoom, and drag to look. Click an organism, structure, resource node or the ground to inspect it."
         tabIndex={0}
       />
       {failure !== undefined && (

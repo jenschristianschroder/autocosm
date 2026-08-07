@@ -9,6 +9,7 @@ import type { Scene } from '@babylonjs/core/scene';
 import '@babylonjs/core/Meshes/thinInstanceMesh';
 import type { OrganismDto, VisualDto } from '../types';
 import { SCENE_SCALE, sceneX, sceneY, sceneZ } from './coords';
+import { markPickable } from './picking';
 
 /**
  * Organism rendering.
@@ -58,17 +59,27 @@ export interface OrganismRendererHandle {
   render(alpha: number, elapsedSeconds: number, cameraPosition: Vector3): void;
   /** Scene-space position of a tracked organism, for camera follow and picking. */
   positionOf(organismId: string, alpha: number): Vector3 | undefined;
+  /**
+   * Resolve a picked thin instance back to the organism it drew. Culling and level of detail mean
+   * instance order is rebuilt every frame, so the lookup has to be rebuilt with it rather than
+   * derived from the snapshot.
+   */
+  organismAt(meshName: string, instanceIndex: number): string | undefined;
   dispose(): void;
 }
 
 export function createOrganismRenderer(scene: Scene): OrganismRendererHandle {
   const groups = new Map<string, LineageGroup>();
   const tracked = new Map<string, Tracked>();
+  /** Mesh name → the organism ids occupying each thin instance slot, in draw order. */
+  const drawn = new Map<string, string[]>();
 
   const detailedMatrices: number[] = [];
   const simpleMatrices: number[] = [];
   const detailedColours: number[] = [];
   const simpleColours: number[] = [];
+  const detailedIds: string[] = [];
+  const simpleIds: string[] = [];
 
   function update(organisms: readonly OrganismDto[]): number {
     const seen = new Set<string>();
@@ -96,6 +107,8 @@ export function createOrganismRenderer(scene: Scene): OrganismRendererHandle {
         };
         group.detailed.material = group.material;
         group.simple.material = group.material;
+        markPickable(group.detailed, 'organism', true);
+        markPickable(group.simple, 'organism', true);
         groups.set(agentId, group);
       }
 
@@ -138,6 +151,8 @@ export function createOrganismRenderer(scene: Scene): OrganismRendererHandle {
       simpleMatrices.length = 0;
       detailedColours.length = 0;
       simpleColours.length = 0;
+      detailedIds.length = 0;
+      simpleIds.length = 0;
 
       for (const member of group.members) {
         const x = member.fromX + (member.toX - member.fromX) * t;
@@ -172,15 +187,23 @@ export function createOrganismRenderer(scene: Scene): OrganismRendererHandle {
         if (distance <= LOD_DISTANCE) {
           matrix.copyToArray(detailedMatrices, detailedMatrices.length);
           detailedColours.push(shade, shade, shade, 1);
+          detailedIds.push(member.dto.id);
         } else {
           matrix.copyToArray(simpleMatrices, simpleMatrices.length);
           simpleColours.push(shade, shade, shade, 1);
+          simpleIds.push(member.dto.id);
         }
       }
 
       applyInstances(group.detailed, detailedMatrices, detailedColours);
       applyInstances(group.simple, simpleMatrices, simpleColours);
+      drawn.set(group.detailed.name, detailedIds.slice());
+      drawn.set(group.simple.name, simpleIds.slice());
     }
+  }
+
+  function organismAt(meshName: string, instanceIndex: number): string | undefined {
+    return drawn.get(meshName)?.[instanceIndex];
   }
 
   function positionOf(organismId: string, alpha: number): Vector3 | undefined {
@@ -202,9 +225,10 @@ export function createOrganismRenderer(scene: Scene): OrganismRendererHandle {
     }
     groups.clear();
     tracked.clear();
+    drawn.clear();
   }
 
-  return { update, render, positionOf, dispose };
+  return { update, render, positionOf, organismAt, dispose };
 }
 
 function applyInstances(mesh: Mesh, matrices: readonly number[], colours: readonly number[]): void {
@@ -301,7 +325,8 @@ function buildOrganismMesh(scene: Scene, name: string, visual: VisualDto, detail
     return body;
   }
   merged.name = name;
-  merged.isPickable = false;
+  // Picking is enabled by the renderer once the mesh is registered, so that the instance-slot
+  // lookup and the pickable flag are always turned on together.
   merged.alwaysSelectAsActiveMesh = true;
   merged.thinInstanceCount = 0;
   return merged;

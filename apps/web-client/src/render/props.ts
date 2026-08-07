@@ -10,6 +10,7 @@ import type { Scene } from '@babylonjs/core/scene';
 import '@babylonjs/core/Meshes/thinInstanceMesh';
 import type { ResourceDto, StructureDto } from '../types';
 import { SCENE_SCALE, sceneX, sceneY, sceneZ } from './coords';
+import { markPickable } from './picking';
 
 /**
  * Structures and resource nodes.
@@ -38,6 +39,8 @@ const PATTERN_COLOUR: Record<Pattern, [number, number, number]> = {
 export interface StructureRendererHandle {
   update(structures: readonly StructureDto[]): void;
   positionOf(structureId: string): Vector3 | undefined;
+  /** Resolve a picked thin instance back to the structure it drew. */
+  structureAt(meshName: string, instanceIndex: number): string | undefined;
   dispose(): void;
 }
 
@@ -45,6 +48,8 @@ export function createStructureRenderer(scene: Scene): StructureRendererHandle {
   const meshes = new Map<string, Mesh>();
   const materials = new Map<string, PBRMetallicRoughnessMaterial>();
   const positions = new Map<string, Vector3>();
+  /** Mesh name → the structure ids occupying each thin instance slot, in draw order. */
+  const drawn = new Map<string, string[]>();
 
   function meshFor(pattern: Pattern): Mesh {
     const existing = meshes.get(pattern);
@@ -60,6 +65,7 @@ export function createStructureRenderer(scene: Scene): StructureRendererHandle {
     mesh.material = material;
     mesh.receiveShadows = true;
     mesh.thinInstanceCount = 0;
+    markPickable(mesh, 'structure', true);
 
     meshes.set(pattern, mesh);
     materials.set(pattern, material);
@@ -69,6 +75,7 @@ export function createStructureRenderer(scene: Scene): StructureRendererHandle {
   function update(structures: readonly StructureDto[]): void {
     const byPattern = new Map<Pattern, StructureDto[]>();
     positions.clear();
+    drawn.clear();
 
     for (const structure of structures) {
       const list = byPattern.get(structure.pattern);
@@ -82,6 +89,7 @@ export function createStructureRenderer(scene: Scene): StructureRendererHandle {
       const mesh = meshFor(pattern);
       const matrices: number[] = [];
       const colours: number[] = [];
+      const ids: string[] = [];
 
       for (const structure of list) {
         const x = sceneX(structure.x);
@@ -101,7 +109,10 @@ export function createStructureRenderer(scene: Scene): StructureRendererHandle {
         matrix.copyToArray(matrices, matrices.length);
         const shade = 0.4 + 0.6 * integrity;
         colours.push(shade, shade, shade, 1);
+        ids.push(structure.id);
       }
+
+      drawn.set(mesh.name, ids);
 
       if (matrices.length === 0) {
         mesh.setEnabled(false);
@@ -117,12 +128,14 @@ export function createStructureRenderer(scene: Scene): StructureRendererHandle {
   return {
     update,
     positionOf: (id) => positions.get(id),
+    structureAt: (meshName, instanceIndex) => drawn.get(meshName)?.[instanceIndex],
     dispose() {
       for (const mesh of meshes.values()) mesh.dispose(false, false);
       for (const material of materials.values()) material.dispose();
       meshes.clear();
       materials.clear();
       positions.clear();
+      drawn.clear();
     },
   };
 }
@@ -180,6 +193,8 @@ function buildStructureMesh(scene: Scene, pattern: Pattern): Mesh {
 
 export interface ResourceRendererHandle {
   update(resources: readonly ResourceDto[]): void;
+  /** Resolve a picked thin instance back to the resource node it drew. */
+  resourceAt(meshName: string, instanceIndex: number): string | undefined;
   dispose(): void;
 }
 
@@ -196,8 +211,8 @@ export function createResourceRenderer(scene: Scene): ResourceRendererHandle {
     { height: 1, diameterTop: 0.08, diameterBottom: 0.5, tessellation: 6 },
     scene,
   );
-  mesh.isPickable = false;
   mesh.thinInstanceCount = 0;
+  markPickable(mesh, 'resource', true);
 
   const material = new PBRMetallicRoughnessMaterial('resourceMaterial', scene);
   material.baseColor = new Color3(1, 1, 1);
@@ -205,10 +220,13 @@ export function createResourceRenderer(scene: Scene): ResourceRendererHandle {
   material.roughness = 0.4;
   mesh.material = material;
 
+  let drawn: string[] = [];
+
   return {
     update(resources) {
       const matrices: number[] = [];
       const colours: number[] = [];
+      const ids: string[] = [];
 
       for (const resource of resources) {
         const fill = resource.capacity > 0 ? resource.quantity / resource.capacity : 0;
@@ -226,7 +244,10 @@ export function createResourceRenderer(scene: Scene): ResourceRendererHandle {
         const [r, g, b] = materialColour(resource.materialId);
         const dim = 0.3 + 0.7 * fill;
         colours.push(r * dim, g * dim, b * dim, 1);
+        ids.push(resource.id);
       }
+
+      drawn = ids;
 
       if (matrices.length === 0) {
         mesh.thinInstanceCount = 0;
@@ -238,9 +259,13 @@ export function createResourceRenderer(scene: Scene): ResourceRendererHandle {
       mesh.thinInstanceSetBuffer('color', Float32Array.from(colours), COLOUR_STRIDE, false);
       mesh.thinInstanceCount = matrices.length / MATRIX_STRIDE;
     },
+    resourceAt(meshName, instanceIndex) {
+      return meshName === mesh.name ? drawn[instanceIndex] : undefined;
+    },
     dispose() {
       material.dispose();
       mesh.dispose(false, false);
+      drawn = [];
     },
   };
 }

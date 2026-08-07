@@ -46,9 +46,23 @@ export type LineageNodeDto = LineageDetailResponse['nodes'][number];
 export type TraitDto = AgentDetailResponse['meanTraits'][number];
 export type GlossaryEntryDto = GlossaryResponse['traits'][number];
 
-/** What the observer currently has selected, if anything. */
+/**
+ * What the observer currently has selected, if anything.
+ *
+ * `region` and `resource` are resolved entirely from the snapshot the client already holds, so
+ * clicking the ground costs no request.
+ */
 export type Selection =
   | { readonly kind: 'none' }
   | { readonly kind: 'organism'; readonly id: string }
   | { readonly kind: 'agent'; readonly id: string }
-  | { readonly kind: 'structure'; readonly id: string };
+  | { readonly kind: 'structure'; readonly id: string }
+  | { readonly kind: 'region'; readonly id: string }
+  | { readonly kind: 'resource'; readonly id: string };
+
+/** What a click in the 3D view landed on. */
+export type PickHit =
+  | { readonly kind: 'organism'; readonly id: string }
+  | { readonly kind: 'structure'; readonly id: string }
+  | { readonly kind: 'resource'; readonly id: string }
+  | { readonly kind: 'region'; readonly id: string };

@@ -5,6 +5,7 @@ import { HemisphericLight } from '@babylonjs/core/Lights/hemisphericLight';
 import { ShadowGenerator } from '@babylonjs/core/Lights/Shadows/shadowGenerator';
 import { CreateSphere } from '@babylonjs/core/Meshes/Builders/sphereBuilder';
 import { CreateGround } from '@babylonjs/core/Meshes/Builders/groundBuilder';
+import { VertexBuffer } from '@babylonjs/core/Buffers/buffer';
 import { BackgroundMaterial } from '@babylonjs/core/Materials/Background/backgroundMaterial';
 import { PBRMetallicRoughnessMaterial } from '@babylonjs/core/Materials/PBR/pbrMetallicRoughnessMaterial';
 import { DynamicTexture } from '@babylonjs/core/Materials/Textures/dynamicTexture';
@@ -13,6 +14,7 @@ import type { Mesh } from '@babylonjs/core/Meshes/mesh';
 import '@babylonjs/core/Lights/Shadows/shadowGeneratorSceneComponent';
 import '@babylonjs/core/Rendering/depthRendererSceneComponent';
 import { WORLD_SCENE_SPAN } from './coords';
+import { waterShade, FULL_DEPTH_SCENE } from './water';
 
 /**
  * Sky, sun, water and atmosphere.
@@ -22,18 +24,34 @@ import { WORLD_SCENE_SPAN } from './coords';
  * simulation used when it fed photosynthesis this tick. Nothing here runs its own clock.
  */
 
+/** Shadow map resolution, chosen per backend. */
+const SHADOW_MAP_SIZE = { webgpu: 2048, webgl2: 1024 } as const;
+
+/** Water plane vertices per axis. Finer than the region grid, so shorelines read as curves. */
+const WATER_SUBDIVISIONS = 96;
+
 export interface EnvironmentHandle {
-  readonly shadows: ShadowGenerator | undefined;
+  readonly shadows: ShadowGenerator;
   readonly water: Mesh;
   /** Apply the newest authoritative light state. */
   setDaylight(dayPhasePerMille: number, lightPerMille: number, pressureKind: string): void;
+  /**
+   * Grade the water against the terrain beneath it.
+   *
+   * Called whenever the terrain mesh is rebuilt. `sampleHeight` takes scene-space `x`/`z` and
+   * returns scene-space ground height, which is exactly the depth the water needs.
+   */
+  setDepthField(sampleHeight: (x: number, z: number) => number): void;
   /** Advance decorative animation only (water ripple). */
   animate(elapsedSeconds: number): void;
   addShadowCaster(mesh: Mesh): void;
   dispose(): void;
 }
 
-export function createEnvironment(scene: Scene, enableShadows: boolean): EnvironmentHandle {
+export function createEnvironment(
+  scene: Scene,
+  quality: keyof typeof SHADOW_MAP_SIZE,
+): EnvironmentHandle {
   scene.clearColor = new Color4(0.03, 0.05, 0.09, 1);
   scene.ambientColor = new Color3(0.25, 0.28, 0.34);
   scene.fogMode = Scene.FOGMODE_EXP2;
@@ -64,32 +82,61 @@ export function createEnvironment(scene: Scene, enableShadows: boolean): Environ
   ambient.intensity = 0.45;
   ambient.groundColor = new Color3(0.16, 0.18, 0.2);
 
-  // Shadows are optional: on a weak GPU the map costs more than it adds. The caller decides.
-  const shadows = enableShadows ? new ShadowGenerator(1024, sun) : undefined;
-  if (shadows) {
-    shadows.useExponentialShadowMap = true;
-    shadows.darkness = 0.45;
-    shadows.bias = 0.0015;
-  }
+  // Shadows cost a depth pass and a map, but a world without them reads flat. Keep them on both
+  // backends and pay for the difference with resolution rather than an all-or-nothing switch.
+  const shadows = new ShadowGenerator(SHADOW_MAP_SIZE[quality], sun);
+  shadows.useExponentialShadowMap = true;
+  shadows.darkness = 0.45;
+  shadows.bias = 0.0015;
 
+  const waterSpan = WORLD_SCENE_SPAN * 1.6;
   const water = CreateGround(
     'water',
-    { width: WORLD_SCENE_SPAN * 1.6, height: WORLD_SCENE_SPAN * 1.6, subdivisions: 48 },
+    { width: waterSpan, height: waterSpan, subdivisions: WATER_SUBDIVISIONS },
     scene,
   );
   water.position.y = 0;
   water.isPickable = false;
+  // Depth lives in the vertex colours, so the material must not impose a second, uniform alpha.
+  water.hasVertexAlpha = true;
   const waterMaterial = new PBRMetallicRoughnessMaterial('waterMaterial', scene);
-  waterMaterial.baseColor = new Color3(0.06, 0.22, 0.34);
+  waterMaterial.baseColor = new Color3(1, 1, 1);
   waterMaterial.metallic = 0.12;
   waterMaterial.roughness = 0.12;
-  waterMaterial.alpha = 0.78;
+  waterMaterial.alpha = 1;
   waterMaterial.transparencyMode = 2;
   waterMaterial.backFaceCulling = false;
   water.material = waterMaterial;
 
   const basePositions = water.getVerticesData('position');
   const wavePositions = basePositions ? Float32Array.from(basePositions) : undefined;
+  const waterColours = basePositions
+    ? new Float32Array((basePositions.length / 3) * 4)
+    : new Float32Array(0);
+
+  /**
+   * Bake ground depth into the water's vertex colours.
+   *
+   * Beyond the world's edge the sampler edge-extends, which is the right answer for a toroidal
+   * world: the overhang inherits the depth of the border it continues.
+   */
+  function setDepthField(sampleHeight: (x: number, z: number) => number): void {
+    if (!basePositions) return;
+    for (let i = 0; i < waterColours.length / 4; i += 1) {
+      const x = basePositions[i * 3] ?? 0;
+      const z = basePositions[i * 3 + 2] ?? 0;
+      const shade = waterShade(-sampleHeight(x, z));
+      waterColours[i * 4] = shade.r;
+      waterColours[i * 4 + 1] = shade.g;
+      waterColours[i * 4 + 2] = shade.b;
+      waterColours[i * 4 + 3] = shade.a;
+    }
+    water.setVerticesData(VertexBuffer.ColorKind, waterColours, true);
+  }
+
+  // Until terrain arrives there is no depth to sample, so start as open ocean rather than as a
+  // sheet of clear glass that would show nothing at all.
+  setDepthField(() => -FULL_DEPTH_SCENE);
 
   function setDaylight(
     dayPhasePerMille: number,
@@ -109,7 +156,13 @@ export function createEnvironment(scene: Scene, enableShadows: boolean): Environ
     const warm = new Color3(1, 0.86, 0.68);
     const cool = new Color3(0.62, 0.72, 1);
     sun.diffuse = Color3.Lerp(cool, warm, Math.min(1, Math.max(0, light)));
-    ambient.intensity = 0.16 + light * 0.5;
+
+    // Fill light is sky bounce, so it is tinted like the sky and kept well below the sun. It used
+    // to be white and half as strong again, which was survivable only while the terrain normals
+    // were inverted and the sun contributed nothing — the fill was doing all the lighting. With
+    // the sun restored, that much flat white fill washes out the slope shading it now produces.
+    ambient.intensity = 0.12 + light * 0.28;
+    ambient.diffuse = Color3.Lerp(new Color3(0.5, 0.58, 0.78), new Color3(0.62, 0.74, 0.95), light);
 
     const storm = pressureKind === 'storm';
     const drought = pressureKind === 'drought';
@@ -128,10 +181,12 @@ export function createEnvironment(scene: Scene, enableShadows: boolean): Environ
     scene.fogColor = Color3.Lerp(zenith, horizon, 0.65);
     scene.fogDensity = storm ? 0.0085 : 0.0032 + (1 - light) * 0.0022;
     scene.clearColor = new Color4(zenith.r, zenith.g, zenith.b, 1);
+    // Vertex colours carry the water's hue, so the material contributes brightness only. Multiply,
+    // do not replace: at night the same depth gradient survives, merely dimmed and cooled.
     waterMaterial.baseColor = new Color3(
-      0.03 + light * 0.08,
-      0.12 + light * 0.16,
-      0.2 + light * 0.22,
+      0.16 + light * 0.82,
+      0.2 + light * 0.8,
+      0.34 + light * 0.66,
     );
   }
 
@@ -152,12 +207,13 @@ export function createEnvironment(scene: Scene, enableShadows: boolean): Environ
     shadows,
     water,
     setDaylight,
+    setDepthField,
     animate,
     addShadowCaster(mesh) {
-      shadows?.addShadowCaster(mesh, true);
+      shadows.addShadowCaster(mesh, true);
     },
     dispose() {
-      shadows?.dispose();
+      shadows.dispose();
       skyTexture.dispose();
       skyMaterial.dispose();
       sky.dispose(false, false);

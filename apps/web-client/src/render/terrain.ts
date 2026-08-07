@@ -6,6 +6,7 @@ import type { Scene } from '@babylonjs/core/scene';
 import { REGION_GRID } from '@autocosm/domain';
 import type { RegionDto } from '../types';
 import { HEIGHT_SCALE, WORLD_SCENE_SPAN } from './coords';
+import { markPickable } from './picking';
 
 /**
  * Terrain surface.
@@ -23,16 +24,42 @@ import { HEIGHT_SCALE, WORLD_SCENE_SPAN } from './coords';
 /** Vertices per axis. 128² keeps the mesh under ~33k verts: one draw call, no LOD needed. */
 const GRID = 128;
 
+/**
+ * Emit the two triangles of one heightfield cell into `indices`.
+ *
+ * Winding is load-bearing, not cosmetic: `VertexData.ComputeNormals` derives each normal from the
+ * order its triangles are wound, so reversing this reverses the entire surface. The grid was wound
+ * the other way round for the life of the project, which put every normal below the horizon —
+ * measured at a median of 163 degrees from vertical. A surface facing away from the sun takes no
+ * directional light at all, so the terrain was lit by the flat ambient fill alone. That is why
+ * relief, shadows and depth-graded water all rendered as one uniform pale wash however they were
+ * tuned: none of them can show on a surface the sun never reaches.
+ *
+ * Exported so the invariant can be tested against Babylon's real normal computation without a GPU.
+ */
+export function pushCellIndices(indices: number[], row: number, col: number, grid: number): void {
+  const a = row * grid + col;
+  const b = a + 1;
+  const c = a + grid;
+  const d = c + 1;
+  indices.push(a, b, c, b, d, c);
+}
+
 export interface TerrainHandle {
   readonly mesh: Mesh;
   /** Interpolated scene-space height, used to keep the camera above ground. */
   heightAt(sceneXValue: number, sceneZValue: number): number;
+  /** Which region a point on the surface belongs to, for click-to-inspect. */
+  regionAt(sceneXValue: number, sceneZValue: number): RegionDto | undefined;
   dispose(): void;
 }
 
 const BIOME_COLOURS: Record<string, [number, number, number]> = {
-  abyss: [0.05, 0.09, 0.16],
-  shallows: [0.12, 0.24, 0.3],
+  // `abyss` covers 24 of 64 regions — more of the world than any other biome — so it cannot be
+  // near-black without the map losing a third of its readable area. Dark enough to read as deep,
+  // light enough to show relief through the water above it.
+  abyss: [0.1, 0.15, 0.23],
+  shallows: [0.18, 0.32, 0.36],
   shore: [0.55, 0.5, 0.36],
   plain: [0.24, 0.38, 0.2],
   highland: [0.3, 0.33, 0.24],
@@ -79,22 +106,21 @@ export function buildTerrain(
       uvs[i * 2 + 1] = v * REGION_GRID;
 
       const [r, g, b] = sampleColour(colours, rx, rz);
-      // Damp saturation below sea level so submerged ground reads as depth, not as painted rock.
+      // Depth is cued by the water sheet above (`water.ts`), which tints from coastal teal to navy.
+      // Applying the full cue here as well double-counted it: submerged ground was desaturated to
+      // near-black and then covered by dark blue water, so the abyss lost all structure. Keep only
+      // a light touch, enough that a seabed does not read as dry land seen through glass.
       const submerged = elevationCu < 0 ? Math.min(1, -elevationCu / 1800) : 0;
-      colors[i * 4] = r * (1 - submerged * 0.65);
-      colors[i * 4 + 1] = g * (1 - submerged * 0.45);
-      colors[i * 4 + 2] = b * (1 - submerged * 0.15) + submerged * 0.08;
+      colors[i * 4] = r * (1 - submerged * 0.3);
+      colors[i * 4 + 1] = g * (1 - submerged * 0.2);
+      colors[i * 4 + 2] = b * (1 - submerged * 0.05) + submerged * 0.05;
       colors[i * 4 + 3] = 1;
     }
   }
 
   for (let row = 0; row < GRID - 1; row += 1) {
     for (let col = 0; col < GRID - 1; col += 1) {
-      const a = row * GRID + col;
-      const b = a + 1;
-      const c = a + GRID;
-      const d = c + 1;
-      indices.push(a, c, b, b, c, d);
+      pushCellIndices(indices, row, col, GRID);
     }
   }
 
@@ -108,9 +134,9 @@ export function buildTerrain(
   data.uvs = uvs as unknown as number[];
   data.colors = colors as unknown as number[];
   data.applyToMesh(mesh, false);
-  mesh.isPickable = true;
   mesh.receiveShadows = true;
   mesh.freezeWorldMatrix();
+  markPickable(mesh, 'terrain', false);
 
   const material = new PBRMetallicRoughnessMaterial('terrainMaterial', scene);
   material.baseColor = new Color3(1, 1, 1);
@@ -119,6 +145,9 @@ export function buildTerrain(
   mesh.material = material;
 
   const cell = WORLD_SCENE_SPAN / (GRID - 1);
+  const byCell = new Map<string, RegionDto>();
+  for (const region of regions) byCell.set(`${region.col}:${region.row}`, region);
+
   return {
     mesh,
     heightAt(x, z) {
@@ -134,14 +163,31 @@ export function buildTerrain(
       const h11 = heights[(r0 + 1) * GRID + c0 + 1] ?? h00;
       return lerp(lerp(h00, h10, fx), lerp(h01, h11, fx), fz);
     },
+    regionAt(x, z) {
+      // The surface is a smoothed interpolation of regional means, so a point on it belongs to
+      // whichever region grid cell it falls in — not to whichever vertex happened to be picked.
+      const u = (x + WORLD_SCENE_SPAN / 2) / WORLD_SCENE_SPAN;
+      const v = (z + WORLD_SCENE_SPAN / 2) / WORLD_SCENE_SPAN;
+      const col = clampInt(Math.floor(u * REGION_GRID), 0, REGION_GRID - 1);
+      const row = clampInt(Math.floor(v * REGION_GRID), 0, REGION_GRID - 1);
+      return byCell.get(`${col}:${row}`);
+    },
     dispose() {
       material.dispose();
       mesh.dispose(false, true);
+      byCell.clear();
     },
   };
 }
 
-/** Extract a REGION_GRID² scalar field, filling gaps so a partial snapshot still renders. */
+/**
+ * Extract a REGION_GRID² scalar field.
+ *
+ * Missing cells are filled with the mean of those present. That is a degraded-mode fallback for a
+ * partial field, not the normal path: callers pass the world's full regional field from `/world`,
+ * because a snapshot carries only the observed neighbourhood and filling the other 86% with a
+ * constant draws most of the world as a featureless plate.
+ */
 function regionField(
   regions: readonly RegionDto[],
   pick: (r: RegionDto) => number,
@@ -196,11 +242,29 @@ function bilinear(field: Float32Array, x: number, z: number): number {
   );
 }
 
+/**
+ * Sample the regional colour field with the same smoothed bilinear filter used for height.
+ *
+ * Nearest-neighbour sampling here would draw the world as an 8x8 grid of flat tiles with hard
+ * seams, while the ground beneath them curved smoothly — biomes blend into one another instead.
+ */
 function sampleColour(field: Float32Array, x: number, z: number): [number, number, number] {
-  const x0 = clampInt(Math.round(x), 0, REGION_GRID - 1);
-  const z0 = clampInt(Math.round(z), 0, REGION_GRID - 1);
-  const i = (z0 * REGION_GRID + x0) * 3;
-  return [field[i] ?? 0.3, field[i + 1] ?? 0.3, field[i + 2] ?? 0.3];
+  const x0 = Math.floor(x);
+  const z0 = Math.floor(z);
+  const fx = smooth(x - x0);
+  const fz = smooth(z - z0);
+  const at = (c: number, r: number, channel: number): number => {
+    const cc = clampInt(c, 0, REGION_GRID - 1);
+    const rr = clampInt(r, 0, REGION_GRID - 1);
+    return field[(rr * REGION_GRID + cc) * 3 + channel] ?? 0.3;
+  };
+  const channel = (i: number): number =>
+    lerp(
+      lerp(at(x0, z0, i), at(x0 + 1, z0, i), fx),
+      lerp(at(x0, z0 + 1, i), at(x0 + 1, z0 + 1, i), fx),
+      fz,
+    );
+  return [channel(0), channel(1), channel(2)];
 }
 
 /** Deterministic value noise. No `Math.random`: the same world always looks the same. */
