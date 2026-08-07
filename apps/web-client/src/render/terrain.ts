@@ -21,8 +21,63 @@ import { markPickable } from './picking';
  * this interpolation. It only makes the ground look like ground.
  */
 
-/** Vertices per axis. 128² keeps the mesh under ~33k verts: one draw call, no LOD needed. */
-const GRID = 128;
+/**
+ * Vertices per axis.
+ *
+ * This is the binding constraint on surface detail, and it was mistaken for the noise function.
+ * Value noise has features one lattice cell wide, so an octave of frequency `f` gets `GRID / f`
+ * samples per feature. Below about two, the mesh cannot represent the octave at all and the term
+ * folds back as low-frequency noise — it makes the surface *wrong*, not finer.
+ *
+ * Measured by reconstructing each octave from the grid with the same linear interpolation the mesh
+ * performs between its vertices, against a densely sampled ground truth:
+ *
+ * | octave | GRID=128 | GRID=256 |
+ * |---|---|---|
+ * | f=26 | 4.92 samples/cell, 2.1% lost | 9.85, 0.6% |
+ * | f=71 | **1.80, 14.4% lost** | 3.61, 3.7% |
+ * | f=140 | **0.91, 40.6% lost** | 1.83, 13.2% |
+ *
+ * So the shipped `f=71` octave was already losing a seventh of itself, and the obvious next move —
+ * add a third, finer octave — would have made it worse rather than better at 128. Vertices first.
+ *
+ * 256² is 65k vertices and 130k triangles in a single static draw call with a frozen world matrix,
+ * a 3.1 MB vertex buffer. Trivial for the WebGL2 floor. It is *not* free under the software
+ * rasteriser that headless Chromium uses: measured at the same tick and world state, the full
+ * 1280x800 viewport ran 11 fps at GRID=128, 9 at 192 and 7-8 at 256. That cost is fill-rate
+ * interacting with smaller triangles rather than geometry throughput — at a quarter of the viewport
+ * area, 128 and 192 are indistinguishable (16 vs 17 fps). Software rasterisation is not the target;
+ * the numbers are recorded here so the next person revisiting this has the baseline.
+ */
+export const TERRAIN_GRID = 256;
+const GRID = TERRAIN_GRID;
+
+/**
+ * The lowest sampling rate an octave may be drawn at, in vertices per noise cell.
+ *
+ * Nyquist puts the hard floor at 2. This sits above it because reconstruction here is linear
+ * interpolation between vertices rather than an ideal filter, so fidelity is already degrading
+ * before the theoretical limit: measured loss is 7.8% at 2.5 samples per cell, 11.5% at 2.0 and
+ * 37.7% at 1.0.
+ */
+export const MIN_SAMPLES_PER_NOISE_CELL = 2.5;
+
+/**
+ * Detail octaves, coarse to fine, added on top of the interpolated regional means.
+ *
+ * Amplitude falls as frequency rises so the fine terms read as surface texture rather than
+ * competing with the landforms. Every frequency here must stay within
+ * `TERRAIN_GRID / MIN_SAMPLES_PER_NOISE_CELL`, which `terrain.test.ts` enforces — that assertion is
+ * what stops a future "add more detail" change from adding aliasing instead.
+ */
+export const DETAIL_OCTAVES: readonly {
+  readonly frequency: number;
+  readonly amplitudeCu: number;
+}[] = [
+  { frequency: 26, amplitudeCu: 260 },
+  { frequency: 71, amplitudeCu: 90 },
+  { frequency: 100, amplitudeCu: 38 },
+];
 
 /**
  * Emit the two triangles of one heightfield cell into `indices`.
@@ -94,7 +149,10 @@ export function buildTerrain(
       const rz = v * REGION_GRID - 0.5;
 
       const base = bilinear(elevation, rx, rz);
-      const detail = (noise(u * 26, v * 26) - 0.5) * 260 + (noise(u * 71, v * 71) - 0.5) * 90;
+      let detail = 0;
+      for (const octave of DETAIL_OCTAVES) {
+        detail += (noise(u * octave.frequency, v * octave.frequency) - 0.5) * octave.amplitudeCu;
+      }
       const elevationCu = base + detail;
       const y = elevationCu * HEIGHT_SCALE;
 
@@ -268,7 +326,13 @@ function sampleColour(field: Float32Array, x: number, z: number): [number, numbe
 }
 
 /** Deterministic value noise. No `Math.random`: the same world always looks the same. */
-function valueNoise(seed: number): (x: number, z: number) => number {
+/**
+ * Deterministic value noise on the unit lattice.
+ *
+ * Exported so the sampling-rate test can measure the real function. A test that reimplemented it
+ * would be measuring its own copy, and would keep passing after this one changed.
+ */
+export function valueNoise(seed: number): (x: number, z: number) => number {
   const hash = (x: number, z: number): number => {
     let h = (Math.imul(x | 0, 374_761_393) ^ Math.imul(z | 0, 668_265_263) ^ seed) >>> 0;
     h = Math.imul(h ^ (h >>> 13), 1_274_126_177) >>> 0;
