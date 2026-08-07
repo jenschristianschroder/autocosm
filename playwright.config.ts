@@ -11,10 +11,17 @@ import { defineConfig, devices } from '@playwright/test';
 
 const PORT = 8099;
 
+// The whole spectator journey runs as one test, and CI has no GPU: swiftshader rasterises in
+// software, so it is roughly twice as slow as a local run. It got slower again once the terrain
+// normals were fixed, because a surface that takes directional light also resolves shadows, and
+// the shadow pass had previously been drawing into a scene that could not show it. 50s locally,
+// ~96s on a runner, so the budget is set well clear of both rather than at the boundary.
+const TEST_TIMEOUT_MS = 180_000;
+
 export default defineConfig({
   testDir: './tests/browser',
   outputDir: './test-results',
-  timeout: 90_000,
+  timeout: TEST_TIMEOUT_MS,
   expect: { timeout: 20_000 },
   fullyParallel: false,
   workers: 1,
