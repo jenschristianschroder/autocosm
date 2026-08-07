@@ -6,6 +6,7 @@ import type {
   MaterialId,
   OrganismId,
   RegionId,
+  ResourceNodeId,
   StructureId,
   WorldId,
 } from './ids.js';
@@ -34,6 +35,7 @@ export type WorldEventKind =
   | 'energyShared'
   | 'signalEmitted'
   | 'traitExpressed'
+  | 'materialCollected'
   | 'materialDiscovered'
   | 'materialCombined'
   | 'structureBuilt'
@@ -91,6 +93,14 @@ export interface EventPayloads {
     readonly radiusCu: number;
   };
   traitExpressed: { readonly traitId: string; readonly emphasis: number };
+  materialCollected: {
+    readonly materialId: MaterialId;
+    readonly label: string;
+    readonly quantity: number;
+    readonly resourceNodeId: ResourceNodeId;
+    /** Units left in the node afterwards, so depletion is legible without a second lookup. */
+    readonly remaining: number;
+  };
   materialDiscovered: { readonly materialId: MaterialId };
   materialCombined: {
     readonly materialId: MaterialId;

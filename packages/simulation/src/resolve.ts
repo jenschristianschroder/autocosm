@@ -490,13 +490,31 @@ function applyCollect(
     : [...organism.inventory, { materialId: node.materialId, quantity: taken }];
 
   ctx.ledger.debit(cost);
-  ctx.draft.resources.set(node.id, { ...node, quantity: node.quantity - taken });
+  const remaining = node.quantity - taken;
+  ctx.draft.resources.set(node.id, { ...node, quantity: remaining });
   ctx.draft.organisms.set(organism.id, {
     ...organism,
     energy: organism.energy - cost,
     inventory,
   });
   learnMaterial(ctx, organism.agentId, node.materialId);
+  // Gathering was the only one of the thirteen actions that resolved silently, which made the
+  // single most frequent productive act in the world invisible to spectators and to every
+  // measurement taken over the event log. Emitting it is what makes foraging observable at all.
+  const label = ctx.draft.materials.get(node.materialId)?.label ?? node.materialId;
+  ctx.events.emit('materialCollected', organism.regionId, {
+    summary: `${organism.id} gathered ${taken} ${label}`,
+    organismId: organism.id,
+    agentId: organism.agentId,
+    lineageId: organism.lineageId,
+    payload: {
+      materialId: node.materialId,
+      label,
+      quantity: taken,
+      resourceNodeId: node.id,
+      remaining,
+    },
+  });
   return ACCEPTED;
 }
 
