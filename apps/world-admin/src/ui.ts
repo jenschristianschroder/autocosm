@@ -116,6 +116,7 @@ export const INSPECTOR_JS = String.raw`(() => {
   // lifetime so the popup appears at most once per session.
   const TOKEN_KEY = 'ac.idtoken';
   const PKCE_KEY = 'ac.pkce';
+  const RESULT_KEY = 'ac.authresult';
   const b64url = (bytes) =>
     btoa(String.fromCharCode.apply(null, new Uint8Array(bytes)))
       .replace(/\+/g, '-')
@@ -145,19 +146,29 @@ export const INSPECTOR_JS = String.raw`(() => {
     sessionStorage.setItem(TOKEN_KEY, JSON.stringify({ token: token, exp: exp }));
   }
 
-  function waitForAuthMessage() {
+  // The popup returns its result through localStorage, not window.opener.postMessage. The page
+  // sends Cross-Origin-Opener-Policy: same-origin (via helmet), which severs the popup's opener
+  // reference once it has navigated cross-origin to the identity provider — so a postMessage back
+  // would be silently dropped and this wait would time out. A localStorage write is origin-scoped
+  // and survives that isolation, so the opener simply polls for it.
+  function waitForAuthResult() {
     return new Promise((resolve, reject) => {
-      const onMessage = (ev) => {
-        if (ev.origin !== location.origin || !ev.data || ev.data.source !== 'autocosm-auth') return;
-        clearTimeout(timer);
-        window.removeEventListener('message', onMessage);
-        resolve(ev.data);
-      };
-      const timer = setTimeout(() => {
-        window.removeEventListener('message', onMessage);
-        reject(new Error('sign-in timed out'));
-      }, 120000);
-      window.addEventListener('message', onMessage);
+      const deadline = Date.now() + 120000;
+      const iv = setInterval(() => {
+        let raw = null;
+        try { raw = localStorage.getItem(RESULT_KEY); } catch (e) { /* ignore */ }
+        if (raw) {
+          clearInterval(iv);
+          try { localStorage.removeItem(RESULT_KEY); } catch (e) { /* ignore */ }
+          let data = null;
+          try { data = JSON.parse(raw); } catch (e) { /* ignore */ }
+          if (data) resolve(data);
+          else reject(new Error('sign-in failed'));
+        } else if (Date.now() > deadline) {
+          clearInterval(iv);
+          reject(new Error('sign-in timed out'));
+        }
+      }, 400);
     });
   }
 
@@ -184,9 +195,10 @@ export const INSPECTOR_JS = String.raw`(() => {
       state: state,
       nonce: nonce,
     }).toString();
+    try { localStorage.removeItem(RESULT_KEY); } catch (e) { /* ignore */ }
     const popup = window.open(authorize.toString(), 'autocosm-signin', 'width=520,height=680');
     if (!popup) throw new Error('sign-in popup was blocked');
-    const result = await waitForAuthMessage();
+    const result = await waitForAuthResult();
     let saved = {};
     try { saved = JSON.parse(sessionStorage.getItem(PKCE_KEY) || '{}'); } catch (e) { /* ignore */ }
     sessionStorage.removeItem(PKCE_KEY);
@@ -333,8 +345,9 @@ export const INSPECTOR_JS = String.raw`(() => {
 
 /**
  * The sign-in popup's landing page. Microsoft Entra redirects the popup here with an authorization
- * code; the page hands that code back to the window that opened it and closes. Its script is served
- * separately (`/auth-callback.js`) so the Content-Security-Policy needs no inline-script exception.
+ * code; the page hands that code to the main window through localStorage (which survives the
+ * cross-origin-opener isolation the page sets) and closes. Its script is served separately
+ * (`/auth-callback.js`) so the Content-Security-Policy needs no inline-script exception.
  */
 export const AUTH_CALLBACK_HTML = `<!doctype html>
 <html lang="en">
@@ -353,7 +366,7 @@ export const AUTH_CALLBACK_JS = String.raw`(() => {
     errorDescription: p.get('error_description'),
   };
   try {
-    if (window.opener) window.opener.postMessage(message, location.origin);
+    localStorage.setItem('ac.authresult', JSON.stringify(message));
   } catch (e) { /* ignore */ }
   window.close();
 })();`;

@@ -184,7 +184,7 @@ describe('admin inspector server', () => {
     const script = await app.inject({ method: 'GET', url: '/auth-callback.js' });
     expect(script.statusCode).toBe(200);
     expect(script.headers['content-type']).toContain('javascript');
-    expect(script.body).toContain('postMessage');
+    expect(script.body).toContain('ac.authresult');
     await app.close();
   });
 

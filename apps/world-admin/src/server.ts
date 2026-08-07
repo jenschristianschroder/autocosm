@@ -197,9 +197,10 @@ export async function buildAdminServer(deps: AdminServerDependencies): Promise<F
   });
 
   // The sign-in popup lands here after Microsoft Entra returns an authorization code. The page's
-  // only job is to hand the code back to the opener window and close; the PKCE token exchange runs
-  // in the main window. Served with its script on a separate route so the CSP keeps script-src
-  // 'self' with no inline-script exception.
+  // only job is to hand the code to the main window (through localStorage, which survives the
+  // cross-origin-opener isolation the page sets) and close; the PKCE token exchange runs there.
+  // Served with its script on a separate route so the CSP keeps script-src 'self' with no
+  // inline-script exception.
   app.get('/auth/callback', async (_req, reply) => {
     await reply
       .header('content-type', 'text/html; charset=utf-8')
