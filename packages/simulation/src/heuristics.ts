@@ -5,7 +5,9 @@ import {
   makePosition,
   scaleByPerMille,
   type AgentAction,
+  type MaterialId,
   type Observation,
+  type ObservedInventoryEntry,
 } from '@autocosm/domain';
 
 /**
@@ -24,6 +26,18 @@ import {
  * Comfortably above {@link MIN_STRUCTURE_VOLUME} so a first attempt is not wasted.
  */
 const BUILD_MATERIAL_THRESHOLD = 120;
+
+/** How many distinct materials a single construction may draw on. */
+const MAX_BUILD_COMPONENTS = 3;
+
+/**
+ * Patterns whose useful functions are gated on hardness rather than bulk.
+ *
+ * `shell` and `lattice` are the two the `shelter` rule accepts, and shelter is the only
+ * structure function that feeds back into survival (it discounts upkeep). A builder choosing
+ * one of these should reach for its hardest stock, not its largest.
+ */
+const HARD_PATTERNS: ReadonlySet<string> = new Set(['shell', 'lattice']);
 
 /**
  * How worn a construction must be before a passer-by will spend material on it, in per mille.
@@ -153,13 +167,44 @@ export function decideHeuristically(observation: Observation, seed: number): Age
       (s) => s.builtByOwnLineage && s.distanceCu < 900,
     );
     if (carried >= BUILD_MATERIAL_THRESHOLD && !nearbyStructure) {
-      const components = self.inventory
+      // Choose the shape first, then the stock to suit it.
+      //
+      // A structure's derived *function* comes from the blended properties of its components,
+      // and `blendProperties` weights by quantity — so one large soft component drags a hard one
+      // back to the middle. Selecting purely by quantity, as this branch used to, means an
+      // organism builds with whatever it happens to hold most of. Measured over two seeds:
+      // structure hardness p50 = 220 against the shelter rule's 420, and *not one* of 24
+      // structures ever derived a shelter function. The upkeep discount shelter exists to grant
+      // had therefore never executed in 219,324 organism-ticks, so building was pure private
+      // cost and selection deleted the manipulation trait that enables it.
+      const pattern = choosePattern(rng, drives.build);
+      const byQuantity = self.inventory
         .slice()
-        .sort((a, b) => b.quantity - a.quantity || (a.materialId < b.materialId ? -1 : 1))
-        .slice(0, 3)
-        .map((e) => ({ materialId: e.materialId, quantity: Math.max(1, Math.trunc(e.quantity)) }));
+        .sort((a, b) => b.quantity - a.quantity || (a.materialId < b.materialId ? -1 : 1));
+      const preferred = HARD_PATTERNS.has(pattern)
+        ? self.inventory
+            .slice()
+            .sort(
+              (a, b) =>
+                b.hardness - a.hardness ||
+                b.quantity - a.quantity ||
+                (a.materialId < b.materialId ? -1 : 1),
+            )
+        : byQuantity;
+      const take = (
+        entries: readonly ObservedInventoryEntry[],
+      ): { readonly materialId: MaterialId; readonly quantity: number }[] =>
+        entries.slice(0, MAX_BUILD_COMPONENTS).map((e) => ({
+          materialId: e.materialId,
+          quantity: Math.max(1, Math.trunc(e.quantity)),
+        }));
+      const volumeOf = (cs: readonly { readonly quantity: number }[]): number =>
+        cs.reduce((sum, c) => sum + c.quantity, 0);
+      // Never trade away a buildable volume for hardness: the hardest stock may be a few scraps.
+      const wanted = take(preferred);
+      const components = volumeOf(wanted) >= BUILD_MATERIAL_THRESHOLD ? wanted : take(byQuantity);
       if (components.length > 0) {
-        return { type: 'build', pattern: choosePattern(rng, drives.build), components };
+        return { type: 'build', pattern, components };
       }
     }
     // Combining two distinct materials is how new composites enter the world.
@@ -237,9 +282,28 @@ export function decideHeuristically(observation: Observation, seed: number): Age
       // node — not merely whether to gather — is what the limit constrains.
       const held = new Set(self.inventory.map((e) => e.materialId));
       const hasFreeSlot = self.inventory.length < self.inventorySlotLimit;
-      const node = observation.resources.find(
+      const candidates = observation.resources.filter(
         (r) => r.quantity > 0 && (hasFreeSlot || held.has(r.materialId)),
       );
+      // A builder reaches for the hardest deposit in sight, not merely the nearest.
+      //
+      // Every candidate is already inside perception radius, so preferring hardness costs a
+      // short walk rather than a journey. It is the difference between building at all and not:
+      // node stock at hardness >= 420 is 17-18% of everything available and the richest deposits
+      // run to 900, but taking the first node with stock meant no organism ever carried anything
+      // above 264 — far under the 420 the shelter rule needs, with blending averaging it down
+      // further. Nearest-first is retained for gatherers that cannot build, where bulk is the
+      // point and a detour is waste.
+      const node = can.has('build')
+        ? candidates
+            .slice()
+            .sort(
+              (a, b) =>
+                b.hardness - a.hardness ||
+                a.distanceCu - b.distanceCu ||
+                (a.resourceNodeId < b.resourceNodeId ? -1 : 1),
+            )[0]
+        : candidates[0];
       if (node) {
         if (node.distanceCu <= INTERACTION_RANGE_CU) {
           return { type: 'collect', resourceNodeId: node.resourceNodeId, quantity: 60 };

@@ -25,6 +25,8 @@ export const SYSTEM_PROMPT = [
   'Rules:',
   '- Choose exactly one action, and only from the provided availableActions list.',
   '- Prefer survival when energy or health is low. Energy is spent by every action.',
+  "- A structure's function comes from its components' blended properties, weighted by quantity:",
+  '  hard, dense components make shelter; a large soft component drags the blend back to average.',
   '- Only reference identifiers that appear in the observation. Invented identifiers are rejected.',
   '- Reply with a single JSON object and nothing else. No prose, no markdown fence, no reasoning.',
   '- The rationale must be at most 180 characters and must not contain chain-of-thought.',

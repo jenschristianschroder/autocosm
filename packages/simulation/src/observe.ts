@@ -48,6 +48,32 @@ export function structureVisibilityRadiusCu(
 }
 
 /**
+ * Extra sight range granted to a deposit, in cu, capped by how much of it is left. A seam of stone
+ * or a crystal outcrop is a static feature of the terrain, not a moving animal, so the same
+ * reasoning that makes a construction a landmark applies to it.
+ *
+ * This exists because deposit density was tuned against the sharpest eye in the world rather than
+ * the median one. `buildResourceNodes` places 14-22 deposits in a 6000x6000 cu region and its
+ * comment claims "a typical perception radius usually contains at least one" — measured at 1200
+ * ticks, only 12/45 and 19/44 organisms could perceive *any* deposit, and 0/45 and 0/44 could
+ * perceive one hard enough to build shelter with, in a world where 39 of 64 regions hold one.
+ * The comment then names the exact consequence that followed: "sparser than this and
+ * material-gathering — and therefore construction — never emerges."
+ *
+ * Scaling by remaining quantity means a rich seam is a landmark and an exhausted one fades back
+ * into the ground, so this reveals where material *is* without flattening the search for it.
+ */
+const DEPOSIT_LANDMARK_BONUS_CU = 1200;
+
+/**
+ * How far away a given deposit is legible. Unlike a structure this constrains observation only:
+ * `applyCollect` gates on `interactionRadiusCu`, so seeing a seam still means walking to it.
+ */
+export function resourceVisibilityRadiusCu(perceptionRadiusCu: number, quantity: number): number {
+  return perceptionRadiusCu + Math.min(DEPOSIT_LANDMARK_BONUS_CU, Math.max(0, quantity) * 2);
+}
+
+/**
  * Compose the bounded local observation an agent is permitted to see.
  *
  * Nothing global leaks in. Only entities inside the organism's perception radius appear,
@@ -81,7 +107,17 @@ export function observe(
     mature: organism.ageTicks >= p.maturityAgeTicks,
     reproductionReady: draft.world.tick >= organism.reproductionReadyTick,
     generation: organism.generation,
-    inventory: organism.inventory.map((e) => ({ materialId: e.materialId, quantity: e.quantity })),
+    inventory: organism.inventory.map((e) => {
+      // An organism handles what it carries, so it knows how hard and how heavy each is. Without
+      // this it can only rank material by quantity, and cannot build deliberately for a function.
+      const material = draft.materials.get(e.materialId);
+      return {
+        materialId: e.materialId,
+        quantity: e.quantity,
+        hardness: material?.properties.hardness ?? 0,
+        density: material?.properties.density ?? 0,
+      };
+    }),
     ...(organism.attachedStructureId === undefined
       ? {}
       : { attachedStructureId: organism.attachedStructureId }),
@@ -137,7 +173,10 @@ export function observe(
     if (!node || node.quantity <= 0) continue;
     if (!neighbourhood.has(node.regionId)) continue;
     const d = distance(organism.position, node.position);
-    if (d > radius) continue;
+    // A deposit is a static feature of the terrain, not a moving neighbour, so it is legible from
+    // further away — scaled by what is left of it. Without this, a typical organism perceives no
+    // deposit at all on most turns and gathering degenerates into a blind random walk.
+    if (d > resourceVisibilityRadiusCu(radius, node.quantity)) continue;
     const definition = draft.materials.get(node.materialId);
     resources.push({
       resourceNodeId: node.id,
@@ -146,6 +185,8 @@ export function observe(
       distanceCu: d,
       quantity: node.quantity,
       nutritionPerUnit: definition?.nutritionPerUnit ?? 0,
+      hardness: definition?.properties.hardness ?? 0,
+      density: definition?.properties.density ?? 0,
       known: knownMaterials.has(node.materialId),
     });
   }

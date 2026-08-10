@@ -93,12 +93,18 @@ export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = Object.freeze({
   maxOrganisms: 420,
   maxDeadOrganismsRetained: 120,
   maxStructures: 160,
-  // Measured with the ceiling lifted, six trajectories over 1500 ticks: discovery converges by
-  // tick ~900 and then stays flat, at 133/161/188/189/201/253 materials. The reachable
-  // combination space closes on its own, so no eviction is needed — only headroom above the
-  // highest natural fixed point. At 96 every world was truncated at 40-70% of its own chemistry
-  // by tick ~182, roughly 15% into a 1200-tick run.
-  maxMaterials: 320,
+  // Measured with the ceiling lifted to 100 000, three trajectories over 3000 ticks: discovery
+  // converges and then stays flat, at 147/165/347 materials, with 1000-2300 ticks of complete
+  // silence after the last discovery. The reachable combination space still closes on its own, so
+  // no eviction is needed — only headroom above the highest natural fixed point.
+  //
+  // This bound has now been outgrown twice, which is the useful part of the history. At 96 every
+  // world was truncated at 40-70% of its own chemistry by tick ~182. At 320 — chosen against a
+  // then-highest fixed point of 253 — seed 4242424 was clipped at exactly 320 while its true
+  // asymptote is 347. The fixed point tracks living population and region occupancy, both of which
+  // the deposit-visibility fix raised sharply (26 -> 137-259 alive, 9 -> 17-23 regions), so 1.26x
+  // headroom did not survive a single balance change. 512 is ~1.5x the highest measured asymptote.
+  maxMaterials: 512,
   maxDecisionsPerTick: 12,
   decisionExpiryTicks: 40,
   minTicksBetweenDecisionsPerLineage: 6,

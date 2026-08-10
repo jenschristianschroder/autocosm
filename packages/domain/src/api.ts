@@ -482,6 +482,12 @@ export const WorldMetaResponseSchema = z.object({
    * Lives on `/world` rather than on the snapshot: it is capped at `maxMaterials`, changes only
    * when something new is discovered, and this route is polled far less often than the snapshot.
    * A client that meets an unknown material id refetches `/world` rather than growing every frame.
+   *
+   * This bound is the outermost link in a chain that has to stay ordered:
+   * `maxMaterials` (512) <= `MAX_CATALOGUE_MATERIALS` (576) <= this. Invert any pair and a full
+   * world either loses an arbitrary alphabetical tail of its catalogue or fails to serve `/world`
+   * at all. `read-model.test.ts` asserts the chain end to end against a saturated catalogue rather
+   * than by comparing the constants, so a future rise in `maxMaterials` fails loudly here.
    */
   materials: z
     .array(
@@ -505,7 +511,7 @@ export const WorldMetaResponseSchema = z.object({
         discoveredAtTick: z.number().int().min(0).optional(),
       }),
     )
-    .max(384),
+    .max(576),
   /** True when the deployment is running without a configured AI provider. */
   heuristicOnly: z.boolean(),
   /** True when a configured AI provider is failing and the world is running degraded. */

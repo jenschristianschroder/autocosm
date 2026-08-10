@@ -24,12 +24,38 @@ import type { WorldState } from './state.js';
  *
  * The mechanism these tests pin is not a number. It is that **the ceiling is not what stops a
  * world** — discovery must end strictly below the bound, having exhausted what it could reach.
+ *
+ * That framing has now paid for itself. The "stops strictly below the bound" assertion carries a
+ * comment saying that reaching `maxMaterials` is *the signal that the headroom has been outgrown,
+ * not that the test is wrong* — and the signal fired. After the deposit-visibility fix, seed
+ * 4242424 sat at exactly 320, the ceiling, with discovery cut mid-flow at tick 1441. Re-measured
+ * unclipped it wants 347 and converges at tick 1924. Living population and region occupancy both
+ * rose sharply, so more material pairs meet and the natural fixed point moved 253 -> 347.
+ * `maxMaterials` went 320 -> 512 and `HORIZON` 1200 -> 2400, both re-grounded on that measurement
+ * rather than nudged until green.
  */
 
-const HORIZON = 1200;
-const TIMEOUT_MS = 600_000;
+/**
+ * The horizon has to outlast the world's own chemistry, or "goes quiet" is untestable.
+ *
+ * Measured with the ceiling lifted to 100 000, three trajectories over 3000 ticks: the last
+ * discovery lands at tick 702 / 832 / **1924**, and nothing is discovered afterwards. 1200 was
+ * enough when the last discovery landed at 644/750/737; the deposit-visibility fix raised living
+ * population 26 -> 137-259 and region occupancy 9 -> 17-23, so far more material pairs come into
+ * contact and exhaustion now takes roughly 2.6x as long. 2400 leaves a silent tail of at least
+ * 400 ticks on the slowest measured trajectory.
+ *
+ * This is the dominant cost in the simulation suite and that is deliberate: convergence is a
+ * whole-world property and there is no cheap proxy for it. A shorter horizon does not make the
+ * test faster, it makes it wrong — at 1200 ticks seed 4242424 is still discovering at close to
+ * peak rate, so a decay assertion there would read noise.
+ */
+const HORIZON = 2400;
+/** The silent tail the slowest trajectory must still leave inside `HORIZON`. */
+const QUIET_TAIL_TICKS = 400;
+const TIMEOUT_MS = 1_800_000;
 
-/** The bound before the fix. Every measured trajectory settles well above it. */
+/** The two bounds this has already outgrown. Every measured trajectory settles above both. */
 const OLD_CEILING = 96;
 
 interface Run {
@@ -81,13 +107,15 @@ describe('material discovery is bounded by chemistry, not by a counter', () => {
   );
 
   it(
-    'goes quiet on its own well before the horizon',
+    'goes quiet on its own, leaving a silent tail inside the run',
     () => {
       // Corroborates the assertion above from the other direction: discovery tails off and stays
-      // off while the world keeps running, rather than being cut mid-flow.
+      // off while the world keeps running, rather than being cut mid-flow. Asserting a *silent
+      // tail* rather than `lastDiscoveryTick < HORIZON` is the difference between "the run happened
+      // to end after the last discovery" and "the world demonstrably stopped and stayed stopped".
       for (const world of worlds) {
         expect(world.lastDiscoveryTick).toBeGreaterThan(0);
-        expect(world.lastDiscoveryTick).toBeLessThan(HORIZON);
+        expect(world.lastDiscoveryTick).toBeLessThanOrEqual(HORIZON - QUIET_TAIL_TICKS);
       }
     },
     TIMEOUT_MS,

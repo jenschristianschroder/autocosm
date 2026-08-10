@@ -29,6 +29,14 @@ import type { WorldState } from './state.js';
  * opposes that ratchet.
  */
 
+/**
+ * The three whole-world tests below each advance 800-1000 ticks. Cost tracks living population,
+ * and the deposit-visibility fix raised that from ~26 to 137-259, taking the ceiling test from
+ * comfortably inside 120s to 163s. Raised with headroom for a loaded CI runner; the assertions
+ * themselves are unchanged.
+ */
+const WORLD_RUN_TIMEOUT_MS = 600_000;
+
 function flat(value: number): Genotype {
   const genotype: Partial<Record<TraitId, number>> = {};
   for (const id of TRAIT_IDS) genotype[id] = value;
@@ -239,65 +247,77 @@ describe('a running world', () => {
    * 4242424 / 91017 / 7 before it existed, not one lineage was ever created after worldgen and
    * every world decayed monotonically from 8 lineages towards 1.
    */
-  it('can create a lineage that worldgen did not', () => {
-    let state = generateWorld({ seed: 7, worldId: 'w-speciation' });
-    const founding = new Set(state.lineages.keys());
-    for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
+  it(
+    'can create a lineage that worldgen did not',
+    () => {
+      let state = generateWorld({ seed: 7, worldId: 'w-speciation' });
+      const founding = new Set(state.lineages.keys());
+      for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
 
-    const outcome = runUntilSplit(displaceFoundingGenomes(state), 200);
-    expect(outcome.founded).toBeGreaterThan(0);
+      const outcome = runUntilSplit(displaceFoundingGenomes(state), 200);
+      expect(outcome.founded).toBeGreaterThan(0);
 
-    const created = [...outcome.state.lineages.keys()].filter((id) => !founding.has(id));
-    expect(created.length).toBe(outcome.founded);
-  }, 120_000);
+      const created = [...outcome.state.lineages.keys()].filter((id) => !founding.has(id));
+      expect(created.length).toBe(outcome.founded);
+    },
+    WORLD_RUN_TIMEOUT_MS,
+  );
 
-  it('gives every splinter its own agent and a copy of its parent culture', () => {
-    let state = generateWorld({ seed: 7, worldId: 'w-speciation' });
-    const founding = new Set(state.lineages.keys());
-    for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
+  it(
+    'gives every splinter its own agent and a copy of its parent culture',
+    () => {
+      let state = generateWorld({ seed: 7, worldId: 'w-speciation' });
+      const founding = new Set(state.lineages.keys());
+      for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
 
-    const outcome = runUntilSplit(displaceFoundingGenomes(state), 200);
-    const created = [...outcome.state.lineages.values()].filter((l) => !founding.has(l.id));
-    expect(created.length).toBeGreaterThan(0);
+      const outcome = runUntilSplit(displaceFoundingGenomes(state), 200);
+      const created = [...outcome.state.lineages.values()].filter((l) => !founding.has(l.id));
+      expect(created.length).toBeGreaterThan(0);
 
-    for (const splinter of created) {
-      // Its own agent, not its parent's. A shared agent would leave the two lineages permanently
-      // identical culturally, so there would be nothing to learn across the boundary.
-      const agent = outcome.state.agents.get(splinter.agentId);
-      expect(agent).toBeDefined();
-      expect(agent?.lineageId).toBe(splinter.id);
+      for (const splinter of created) {
+        // Its own agent, not its parent's. A shared agent would leave the two lineages permanently
+        // identical culturally, so there would be nothing to learn across the boundary.
+        const agent = outcome.state.agents.get(splinter.agentId);
+        expect(agent).toBeDefined();
+        expect(agent?.lineageId).toBe(splinter.id);
 
-      // Its drift clock starts at its own genome, so it cannot immediately split again on
-      // distance it inherited. Every founding lineage here was displaced to flat zero, so a
-      // splinter carrying that same displaced genome would mean it inherited its parent's clock.
-      expect(splinter.foundingGenotype).toBeDefined();
-      expect(genotypeDivergence(splinter.foundingGenotype, flat(0))).toBeGreaterThan(0);
-    }
+        // Its drift clock starts at its own genome, so it cannot immediately split again on
+        // distance it inherited. Every founding lineage here was displaced to flat zero, so a
+        // splinter carrying that same displaced genome would mean it inherited its parent's clock.
+        expect(splinter.foundingGenotype).toBeDefined();
+        expect(genotypeDivergence(splinter.foundingGenotype, flat(0))).toBeGreaterThan(0);
+      }
 
-    // No two lineages share an agent.
-    const agentIds = [...outcome.state.lineages.values()].map((l) => l.agentId);
-    expect(new Set(agentIds).size).toBe(agentIds.length);
-  }, 120_000);
+      // No two lineages share an agent.
+      const agentIds = [...outcome.state.lineages.values()].map((l) => l.agentId);
+      expect(new Set(agentIds).size).toBe(agentIds.length);
+    },
+    WORLD_RUN_TIMEOUT_MS,
+  );
 
-  it('never exceeds the active-lineage ceiling under sustained splitting pressure', () => {
-    let state = generateWorld({ seed: 91017, worldId: 'w-speciation' });
-    for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
+  it(
+    'never exceeds the active-lineage ceiling under sustained splitting pressure',
+    () => {
+      let state = generateWorld({ seed: 91017, worldId: 'w-speciation' });
+      for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
 
-    // Every birth from here is over threshold, so the ceiling is the only thing holding the
-    // count down. Without it this run would found a lineage per birth.
-    state = displaceFoundingGenomes(state);
-    let peak = 0;
-    let founded = 0;
-    for (let i = 0; i < 400; i += 1) {
-      const result = advanceTick(state);
-      state = result.state;
-      founded += result.events.filter((e) => e.kind === 'lineageFounded').length;
-      peak = Math.max(peak, countActiveLineages(state.lineages));
-    }
-    expect(founded).toBeGreaterThan(0);
-    // Not merely "at or under the ceiling" — that would pass even if the ceiling never bound and
-    // the count sat at its founding value. Sustained pressure must actually reach it, so the
-    // assertion proves the ceiling is what stopped the growth.
-    expect(peak).toBe(DEFAULT_SIMULATION_CONFIG.maxActiveLineages);
-  }, 120_000);
+      // Every birth from here is over threshold, so the ceiling is the only thing holding the
+      // count down. Without it this run would found a lineage per birth.
+      state = displaceFoundingGenomes(state);
+      let peak = 0;
+      let founded = 0;
+      for (let i = 0; i < 400; i += 1) {
+        const result = advanceTick(state);
+        state = result.state;
+        founded += result.events.filter((e) => e.kind === 'lineageFounded').length;
+        peak = Math.max(peak, countActiveLineages(state.lineages));
+      }
+      expect(founded).toBeGreaterThan(0);
+      // Not merely "at or under the ceiling" — that would pass even if the ceiling never bound and
+      // the count sat at its founding value. Sustained pressure must actually reach it, so the
+      // assertion proves the ceiling is what stopped the growth.
+      expect(peak).toBe(DEFAULT_SIMULATION_CONFIG.maxActiveLineages);
+    },
+    WORLD_RUN_TIMEOUT_MS,
+  );
 });

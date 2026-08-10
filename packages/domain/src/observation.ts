@@ -33,6 +33,29 @@ export const MAX_OBSERVED_SIGNALS = 6;
 export const MAX_OBSERVED_MEMORIES = 8;
 export const MAX_OBSERVED_GOALS = 3;
 
+/**
+ * A material an organism is carrying, with the physical qualities that decide what it is
+ * good for.
+ *
+ * `hardness` and `density` are present because a structure's derived *function* is decided by
+ * the blended properties of its components (`FUNCTION_RULES`): shelter needs hardness >= 420,
+ * and blending averages, so one soft component drags a hard one back to the middle. Without
+ * these an organism can only rank what it carries by *quantity*, which is what the heuristic
+ * did — so it built with whatever it happened to hold most of, and across 24 structures
+ * measured over two seeds not one ever derived a shelter function. The upkeep discount that
+ * shelter exists to provide had then never executed in 219,324 organism-ticks.
+ *
+ * Same class as `reproductionReady` and `carryCapacity`: a property of the body and its
+ * contents that the organism must be able to perceive before any policy — heuristic or model —
+ * can act on it deliberately.
+ */
+export interface ObservedInventoryEntry {
+  readonly materialId: MaterialId;
+  readonly quantity: number;
+  readonly hardness: PerMille;
+  readonly density: PerMille;
+}
+
 export interface ObservedSelf {
   readonly organismId: OrganismId;
   readonly agentId: AgentId;
@@ -55,7 +78,7 @@ export interface ObservedSelf {
    */
   readonly reproductionReady: boolean;
   readonly generation: number;
-  readonly inventory: readonly { readonly materialId: MaterialId; readonly quantity: number }[];
+  readonly inventory: readonly ObservedInventoryEntry[];
   /**
    * Total material the body can hold, in `mu`.
    *
@@ -123,6 +146,18 @@ export interface ObservedResource {
   readonly distanceCu: number;
   readonly quantity: number;
   readonly nutritionPerUnit: number;
+  /**
+   * How hard and how heavy the deposit is.
+   *
+   * `nutritionPerUnit` answers "is this food?"; these answer "is this worth building with?".
+   * Without them a gatherer can only take the first node with stock, which is what it did:
+   * measured over two seeds, node stock with hardness >= 420 was 17-18% of everything available
+   * and the hardest deposits ran to 900, yet the hardest material held by *any* living organism
+   * was 231 and 264, and not one ever carried anything above 420. Hard stock was abundant,
+   * reachable, and invisible — so no structure could reach the shelter rule's 420 threshold.
+   */
+  readonly hardness: PerMille;
+  readonly density: PerMille;
   readonly known: boolean;
 }
 
@@ -269,7 +304,14 @@ const observedSelfSchema = z.object({
   reproductionReady: z.boolean(),
   generation: z.number().int().min(0),
   inventory: z
-    .array(z.object({ materialId: brandedId<'MaterialId'>(), quantity: z.number().finite() }))
+    .array(
+      z.object({
+        materialId: brandedId<'MaterialId'>(),
+        quantity: z.number().finite(),
+        hardness: perMille,
+        density: perMille,
+      }),
+    )
     .max(32),
   attachedStructureId: brandedId<'StructureId'>().optional(),
   planning: perMille,
@@ -321,6 +363,8 @@ export const ObservationSchema = z.object({
         distanceCu: z.number().finite(),
         quantity: z.number().finite(),
         nutritionPerUnit: z.number().finite(),
+        hardness: perMille,
+        density: perMille,
         known: z.boolean(),
       }),
     )

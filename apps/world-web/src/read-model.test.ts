@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { generateWorld } from '@autocosm/simulation';
+import { DEFAULT_SIMULATION_CONFIG, generateWorld } from '@autocosm/simulation';
 import type { WorldState } from '@autocosm/simulation';
 import {
   asMaterialId,
   asStructureId,
+  BASE_MATERIALS,
   blendProperties,
   combineMaterials,
   deriveMaterialId,
@@ -11,6 +12,7 @@ import {
   deriveStructureFunctions,
   describeStructure,
   initialIntegrity,
+  WorldMetaResponseSchema,
   type MaterialComponent,
   type Structure,
 } from '@autocosm/domain';
@@ -246,5 +248,35 @@ describe('snapshot and world catalogue', () => {
       (m) => m.id,
     );
     expect(ids).toEqual([...ids].sort());
+  });
+
+  it('serves a catalogue saturated to the simulation ceiling without dropping any of it', () => {
+    // Three bounds have to stay ordered — `maxMaterials` <= `MAX_CATALOGUE_MATERIALS` <= the
+    // schema's `.max()` — and they live in three packages. Invert a pair and a full world either
+    // loses an arbitrary alphabetical tail (every material in it renders as a raw id, the exact
+    // illegibility this catalogue exists to fix) or fails to serve `/world` at all.
+    //
+    // This asserts the outcome rather than comparing the constants, because comparing constants is
+    // what let them drift: `maxMaterials` was raised to 512 and the read-model slice to 576 while
+    // the schema stayed at 384, so a world past 384 materials would have failed validation live
+    // while every unit test passed. Saturate the world and push it through the real projection.
+    const { state } = worldWithLearnedRecipe('irrelevant');
+    const base = BASE_MATERIALS[0];
+    if (base === undefined) throw new Error('no base materials to clone');
+
+    const saturated = new Map(state.materials);
+    let filler = 0;
+    while (saturated.size < DEFAULT_SIMULATION_CONFIG.maxMaterials) {
+      const id = asMaterialId(`mxfill${(filler++).toString(36).padStart(6, '0')}`);
+      saturated.set(id, { ...base, id });
+    }
+
+    const meta = composeWorldMeta(
+      { ...state, materials: saturated },
+      { heuristicOnly: false, aiDegraded: false },
+    );
+
+    expect(meta.materials).toHaveLength(DEFAULT_SIMULATION_CONFIG.maxMaterials);
+    expect(() => WorldMetaResponseSchema.parse(meta)).not.toThrow();
   });
 });

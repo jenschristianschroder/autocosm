@@ -459,8 +459,10 @@ function buildResourceNodes(regionId: RegionId, region: Region, seed: number): R
   const coord = regionCoordFromId(regionId) ?? { col: 0, row: 0 };
   const rng = new Prng(hashSeed('resources', seed, regionId));
   const palette = BIOME_MATERIALS[region.biome];
-  // Density is tuned so a typical perception radius usually contains at least one deposit.
-  // Sparser than this and material-gathering — and therefore construction — never emerges.
+  // Density alone does not make a deposit findable: a region is REGION_SPAN_CU across and a
+  // median perception radius covers a few percent of it, so at this count a typical organism
+  // perceives no deposit at all on most turns. `resourceVisibilityRadiusCu` is what closes that
+  // gap; this count controls how much material exists, not how discoverable it is.
   const count = 14 + rng.nextInt(9);
   const nodes: ResourceNode[] = [];
   for (let i = 0; i < count; i += 1) {

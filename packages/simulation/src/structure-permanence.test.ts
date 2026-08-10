@@ -23,7 +23,14 @@ import type { Organism, Structure } from '@autocosm/domain';
  * be reachable and effective.
  */
 
-const TIMEOUT_MS = 120_000;
+/**
+ * A whole-world run costs roughly linearly in living population, and the deposit-visibility fix
+ * (see `deposit-visibility.test.ts`) raised the standing population from ~26 to 137-259. The
+ * 1200-tick run below measured 166s against the previous 120s budget, so this is a cost change
+ * rather than a behaviour change. Matched to `material-discovery.test.ts`, which already needs
+ * this envelope for the same reason.
+ */
+const TIMEOUT_MS = 600_000;
 
 function properties(partial: Partial<MaterialProperties>): MaterialProperties {
   return {
