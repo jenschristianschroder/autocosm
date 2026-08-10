@@ -29,7 +29,15 @@ jobs:
   verify:
     name: verify
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    # Measured on run 31375469182: 19.2 min total, of which the test step alone was 924s (81%).
+    # Everything else — install, format, lint, both type-checks, secret scan, browser build, Bicep
+    # policy assertions — is 222s combined, so splitting non-test steps into a parallel job would
+    # buy nothing. The cost is four long-horizon simulation tests that measure whole-world
+    # properties (chemistry convergence, structure permanence, speciation, deposit visibility);
+    # there is no cheap proxy for any of them and a shorter horizon makes them wrong rather than
+    # faster. 40 leaves real headroom over the measured 19.2 so the next balance change fails on a
+    # defect rather than on the clock.
+    timeout-minutes: 40
     steps:
       - uses: actions/checkout@v4
 

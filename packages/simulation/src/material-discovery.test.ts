@@ -1,5 +1,4 @@
-import { describe, expect, it } from 'vitest';
-import type { WorldEvent } from '@autocosm/domain';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { DEFAULT_SIMULATION_CONFIG } from './config.js';
 import { advanceTick } from './tick.js';
@@ -60,94 +59,110 @@ const OLD_CEILING = 96;
 
 interface Run {
   readonly state: WorldState;
-  readonly events: readonly WorldEvent[];
   readonly lastDiscoveryTick: number;
+  readonly combined: number;
+  readonly discovered: number;
+  readonly combineRejections: number;
 }
 
+/**
+ * Counted, not collected.
+ *
+ * A 2400-tick world emits well over a hundred thousand events and this file runs two of them. The
+ * assertions below need five scalars, so retaining every event was an unbounded allocation buying
+ * nothing — and "bounded" is a rule this simulation applies to itself everywhere else.
+ */
 function run(seed: number, worldId: string): Run {
   let state = generateWorld({ seed, worldId });
-  const events: WorldEvent[] = [];
   let lastDiscoveryTick = 0;
+  let combined = 0;
+  let discovered = 0;
+  let combineRejections = 0;
+
   for (let index = 0; index < HORIZON; index += 1) {
     const result = advanceTick(state);
     state = result.state;
     for (const event of result.events) {
-      if (event.kind === 'materialDiscovered') lastDiscoveryTick = state.world.tick;
+      if (event.kind === 'materialDiscovered') {
+        discovered += 1;
+        lastDiscoveryTick = state.world.tick;
+      } else if (event.kind === 'materialCombined') {
+        combined += 1;
+      } else if (event.kind === 'actionRejected' && event.payload.actionType === 'combine') {
+        combineRejections += 1;
+      }
     }
-    events.push(...result.events);
   }
-  return { state, events, lastDiscoveryTick };
+  return { state, lastDiscoveryTick, combined, discovered, combineRejections };
 }
 
 describe('material discovery is bounded by chemistry, not by a counter', () => {
-  const worlds = [run(4_242_424, 'w-mat'), run(7, 'w-mat')];
+  /**
+   * Built in `beforeAll`, not at describe scope.
+   *
+   * At describe scope this work runs during collection, where no test timeout applies — the
+   * generous `TIMEOUT_MS` on each assertion below would have been guarding roughly 70ms of counting
+   * while the 15 minutes that actually costs something ran unguarded. A world that stopped
+   * advancing would have hung collection rather than failing a test.
+   */
+  const worlds: Run[] = [];
 
-  it(
-    'discovers past the old ceiling',
-    () => {
-      for (const world of worlds) {
-        expect(world.state.materials.size).toBeGreaterThan(OLD_CEILING);
-      }
-    },
-    TIMEOUT_MS,
-  );
+  beforeAll(() => {
+    worlds.push(run(4_242_424, 'w-mat'), run(7, 'w-mat'));
+  }, TIMEOUT_MS);
 
-  it(
-    'stops strictly below the bound, so the bound is not what stopped it',
-    () => {
-      // The load-bearing assertion. A world truncated by its ceiling sits *exactly* at it; a world
-      // that exhausted its reachable combinations sits below it with room to spare. If a future
-      // trajectory ever reaches `maxMaterials`, this fails — which is the signal that the headroom
-      // has been outgrown, not that the test is wrong.
-      for (const world of worlds) {
-        expect(world.state.materials.size).toBeLessThan(DEFAULT_SIMULATION_CONFIG.maxMaterials);
-      }
-    },
-    TIMEOUT_MS,
-  );
+  it('built both worlds', () => {
+    // Every assertion below iterates `worlds`, so an empty array would make all four pass
+    // vacuously. This file has already found four bounds that never bound and three mechanisms
+    // that never fired; an assertion that cannot fail is the same defect class one level up.
+    expect(worlds).toHaveLength(2);
+  });
 
-  it(
-    'goes quiet on its own, leaving a silent tail inside the run',
-    () => {
-      // Corroborates the assertion above from the other direction: discovery tails off and stays
-      // off while the world keeps running, rather than being cut mid-flow. Asserting a *silent
-      // tail* rather than `lastDiscoveryTick < HORIZON` is the difference between "the run happened
-      // to end after the last discovery" and "the world demonstrably stopped and stayed stopped".
-      for (const world of worlds) {
-        expect(world.lastDiscoveryTick).toBeGreaterThan(0);
-        expect(world.lastDiscoveryTick).toBeLessThanOrEqual(HORIZON - QUIET_TAIL_TICKS);
-      }
-    },
-    TIMEOUT_MS,
-  );
+  it('discovers past the old ceiling', () => {
+    for (const world of worlds) {
+      expect(world.state.materials.size).toBeGreaterThan(OLD_CEILING);
+    }
+  });
 
-  it(
-    'repeats a combination it already knows instead of refusing it',
-    () => {
-      // Material ids are content-addressed, so repeating a combination resolves to an id the world
-      // already holds and cannot grow the catalogue. The cap was tested *before* that was known, so
-      // even a repeat was refused once the catalogue filled.
-      for (const world of worlds) {
-        const combined = world.events.filter((e) => e.kind === 'materialCombined').length;
-        const discovered = world.events.filter((e) => e.kind === 'materialDiscovered').length;
-        expect(combined).toBeGreaterThan(discovered);
-      }
-    },
-    TIMEOUT_MS,
-  );
+  it('stops strictly below the bound, so the bound is not what stopped it', () => {
+    // The load-bearing assertion. A world truncated by its ceiling sits *exactly* at it; a world
+    // that exhausted its reachable combinations sits below it with room to spare. If a future
+    // trajectory ever reaches `maxMaterials`, this fails — which is the signal that the headroom
+    // has been outgrown, not that the test is wrong.
+    for (const world of worlds) {
+      expect(world.state.materials.size).toBeLessThan(DEFAULT_SIMULATION_CONFIG.maxMaterials);
+    }
+  });
 
-  it(
-    'almost never refuses a combination at all',
-    () => {
-      // Measured over 1200 ticks: whole-world rejection counts of 0/0/4 across three trajectories,
-      // against 214/118/548 with the ceiling at 96.
-      for (const world of worlds) {
-        const refused = world.events.filter(
-          (e) => e.kind === 'actionRejected' && e.payload.actionType === 'combine',
-        ).length;
-        expect(refused).toBeLessThan(10);
-      }
-    },
-    TIMEOUT_MS,
-  );
+  it('goes quiet on its own, leaving a silent tail inside the run', () => {
+    // Corroborates the assertion above from the other direction: discovery tails off and stays
+    // off while the world keeps running, rather than being cut mid-flow. Asserting a *silent
+    // tail* rather than `lastDiscoveryTick < HORIZON` is the difference between "the run happened
+    // to end after the last discovery" and "the world demonstrably stopped and stayed stopped".
+    //
+    // The tail is why the full horizon is run rather than stopping as soon as a world falls quiet.
+    // Early stopping would be much cheaper and would hide the one outcome worth catching: a world
+    // that goes quiet, then resumes.
+    for (const world of worlds) {
+      expect(world.lastDiscoveryTick).toBeGreaterThan(0);
+      expect(world.lastDiscoveryTick).toBeLessThanOrEqual(HORIZON - QUIET_TAIL_TICKS);
+    }
+  });
+
+  it('repeats a combination it already knows instead of refusing it', () => {
+    // Material ids are content-addressed, so repeating a combination resolves to an id the world
+    // already holds and cannot grow the catalogue. The cap was tested *before* that was known, so
+    // even a repeat was refused once the catalogue filled.
+    for (const world of worlds) {
+      expect(world.combined).toBeGreaterThan(world.discovered);
+    }
+  });
+
+  it('almost never refuses a combination at all', () => {
+    // Measured over 1200 ticks: whole-world rejection counts of 0/0/4 across three trajectories,
+    // against 214/118/548 with the ceiling at 96.
+    for (const world of worlds) {
+      expect(world.combineRejections).toBeLessThan(10);
+    }
+  });
 });
