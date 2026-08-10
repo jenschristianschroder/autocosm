@@ -43,6 +43,7 @@ import { meanGenotypeOf, reproduce } from './evolution.js';
 import { decideHeuristically } from './heuristics.js';
 import { observe } from './observe.js';
 import { EnergyLedger, absorbEnergy, resolveAction, type ResolutionContext } from './resolve.js';
+import { countActiveLineages } from './speciation.js';
 import {
   freezeDraft,
   livingOrganismIds,
@@ -250,14 +251,20 @@ export function advanceTick(state: WorldState, input: TickInput = {}): TickResul
 
   // 11. World statistics.
   const living = livingOrganismIds(draft).length;
-  let activeLineages = 0;
-  let extinctLineages = 0;
-  for (const id of sortedIds(draft.lineages)) {
-    const lineage = draft.lineages.get(id);
-    if (!lineage) continue;
-    if (lineage.extinctAtTick === undefined) activeLineages += 1;
-    else extinctLineages += 1;
-  }
+  // Both counted from what they mean, and deliberately not from each other. `activeLineages` asks
+  // the same question `evaluateSpeciation` asks — `livingCount > 0` — because a stat that
+  // contradicts the organisms it counts is worse than no stat: this is the number production read
+  // a monoculture from, reporting one lineage while three were populated and speciation saw all
+  // three. `extinctLineages` asks whether the lineage actually died.
+  //
+  // They need not sum to `lineages.size`, and that is the point. A lineage a spectator has just
+  // created sits with no members and no death until `foundPendingLineages` places its founder, so
+  // deriving one count as `size - other` would have to call it either alive or dead, and it is
+  // neither.
+  const activeLineages = countActiveLineages(draft.lineages);
+  const extinctLineages = [...draft.lineages.values()].filter(
+    (lineage) => lineage.extinctAtTick !== undefined,
+  ).length;
   draft.world = {
     ...draft.world,
     stats: {
@@ -782,6 +789,28 @@ function updateLineages(draft: WorldDraft, events: EventSink): void {
       deaths: lineage.deaths + deaths,
       ...(mean ? { meanGenotype: mean } : {}),
     };
+
+    // A lineage that has living members is not extinct, whatever the record says. In a world that
+    // only ever advanced through this engine the branch is unreachable — nothing can reproduce
+    // from zero organisms — and a test asserts no ordinary trajectory triggers it. It exists
+    // because the deployed world reached exactly this contradiction: `ln-hunters` carried 354
+    // living organisms while its agent read `extinct`, and `activeLineages` reported 1 of 3.
+    //
+    // Left latched the damage compounds rather than sits still: the extinction branch below is
+    // guarded on `extinctAtTick === undefined`, so a lineage stuck in this state can never emit
+    // `lineageExtinct` again, and its real death would pass unrecorded. Clearing the flag costs
+    // nothing when the world is healthy and restores the world's ability to narrate itself when
+    // it is not.
+    if (living.length > 0 && lineage.extinctAtTick !== undefined) {
+      const { extinctAtTick: _cleared, ...revived } = updated;
+      draft.lineages.set(lineageId, revived);
+      const agent = draft.agents.get(lineage.agentId);
+      if (agent && agent.status === 'extinct') {
+        const { extinctAtTick: _agentCleared, ...rest } = agent;
+        draft.agents.set(agent.id, { ...rest, status: 'active' });
+      }
+      continue;
+    }
 
     if (living.length === 0 && lineage.extinctAtTick === undefined && lineage.births > 0) {
       draft.lineages.set(lineageId, { ...updated, extinctAtTick: draft.world.tick });
