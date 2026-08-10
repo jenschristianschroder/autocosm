@@ -17,6 +17,7 @@ import {
   type Genotype,
   type Lineage,
   type Organism,
+  type RejectionReason,
   type TraitId,
 } from '@autocosm/domain';
 import type { SimulationConfig } from './config.js';
@@ -39,7 +40,17 @@ import { countActiveLineages, evaluateSpeciation, splinterName } from './speciat
  */
 export interface ReproductionOutcome {
   readonly child: Organism | null;
-  readonly reason?: string;
+  /**
+   * Typed, not `string`.
+   *
+   * This was `string`, which meant nothing forced it to be a reason the rest of the world
+   * understands. `tick.ts` could not widen it to a `RejectionReason` without a cast, so it
+   * emitted a hardcoded `actionUnavailable` in the structured payload and put the real cause
+   * only in the prose summary. Every programmatic reader of the rejection stream — including
+   * the production probe that is this project's fastest diagnostic — therefore saw a constant
+   * where the cause should have been.
+   */
+  readonly reason?: RejectionReason;
 }
 
 /** Maximum absolute change to one trait in one mutation event, in per-mille. */

@@ -198,6 +198,21 @@ export interface ObservedEnvironment {
   readonly biomass: number;
   readonly pressure: string;
   readonly pressureSeverity: PerMille;
+  /**
+   * Whether the world is at its concurrent organism ceiling.
+   *
+   * Reproduction has three gates: maturity, the refractory period, and room in the world.
+   * `mature` and `reproductionReady` mirror the first two; this mirrors the third, which was
+   * left behind — the same shape as the fourth catalogue bound that no test could catch.
+   *
+   * Without it no policy, heuristic or model, can tell a full world from a failure, so a
+   * healthy organism past its cooldown proposes a birth the simulation is certain to refuse.
+   * That costs it the *entire* turn, because `decide()` returns on the first matching branch:
+   * it never reaches gather, build, combine, teach or explore. Measured on a saturated world,
+   * this was 19,485 / 27,953 / 21,385 doomed proposals over 1500 ticks across three seeds —
+   * 99% of every rejection in the world.
+   */
+  readonly atPopulationCeiling: boolean;
 }
 
 export interface ObservedMemory {
@@ -338,6 +353,7 @@ export const ObservationSchema = z.object({
     biomass: z.number().finite(),
     pressure: boundedText(32),
     pressureSeverity: perMille,
+    atPopulationCeiling: z.boolean(),
   }),
   organisms: z
     .array(

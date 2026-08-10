@@ -162,7 +162,11 @@ export function advanceTick(state: WorldState, input: TickInput = {}): TickResul
           organismId: current.id,
           agentId: current.agentId,
           lineageId: current.lineageId,
-          payload: { actionType: 'reproduce', reason: 'actionUnavailable' },
+          // Pass the real cause through. This was hardcoded to `actionUnavailable`, so the
+          // structured field every harvester reads was a constant while only the prose summary
+          // carried the truth — the same defect class as the `payload.action` harvester that
+          // produced `undefined/<reason>` keys.
+          payload: { actionType: 'reproduce', reason: outcome.reason ?? 'actionUnavailable' },
         });
       }
     } else {

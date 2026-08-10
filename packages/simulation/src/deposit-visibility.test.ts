@@ -68,6 +68,21 @@ describe('a typical organism can find material to build with', () => {
    */
   const HORIZON = 600;
 
+  /**
+   * Budgets a 600-tick world run under suite contention, not in isolation.
+   *
+   * Measured: 49s and 32s when this file runs alone, but the full suite runs files in parallel
+   * alongside `material-discovery.test.ts`, whose two 2400-tick worlds occupy ~15 minutes of
+   * CPU. Under that load the same two runs took ~120s and ~104s, and seed 91017 tipped over the
+   * previous 120s budget — an assertion failure that was really a scheduling one.
+   *
+   * Attributed rather than assumed: re-measured with the population-ceiling observable stashed,
+   * seed 91017 took 48.6s against 51.5s with it — a 6% delta that is noise, so the behaviour
+   * change is not the cause. The budget was simply set from an isolated measurement and was
+   * riding at ~2.5x under the load it actually runs in.
+   */
+  const TIMEOUT_MS = 300_000;
+
   function perceivingAnyDeposit(seed: number, worldId: string): number {
     let state: WorldState = generateWorld({ seed, worldId });
     for (let index = 0; index < HORIZON; index += 1) state = advanceTick(state).state;
@@ -84,11 +99,19 @@ describe('a typical organism can find material to build with', () => {
     return Math.round((perceiving / alive) * 100);
   }
 
-  it('on seed 91017', () => {
-    expect(perceivingAnyDeposit(91_017, 'w-deposit-a')).toBeGreaterThan(70);
-  }, 120_000);
+  it(
+    'on seed 91017',
+    () => {
+      expect(perceivingAnyDeposit(91_017, 'w-deposit-a')).toBeGreaterThan(70);
+    },
+    TIMEOUT_MS,
+  );
 
-  it('on seed 4242424', () => {
-    expect(perceivingAnyDeposit(4_242_424, 'w-deposit-b')).toBeGreaterThan(70);
-  }, 120_000);
+  it(
+    'on seed 4242424',
+    () => {
+      expect(perceivingAnyDeposit(4_242_424, 'w-deposit-b')).toBeGreaterThan(70);
+    },
+    TIMEOUT_MS,
+  );
 });

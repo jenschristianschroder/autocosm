@@ -179,6 +179,11 @@ export const REJECTION_REASONS = [
   'malformed',
   'rateLimited',
   'actionUnavailable',
+  // The world is at its concurrent organism ceiling. Distinct from `actionUnavailable`, which is
+  // what this was reported as until the reproduction outcome became typed: a spectator reading
+  // "unavailable" learns nothing, while "population" says the world is full and the organism
+  // should do something else this turn.
+  'population',
 ] as const;
 
 export type RejectionReason = (typeof REJECTION_REASONS)[number];

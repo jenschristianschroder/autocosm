@@ -54,6 +54,7 @@ function anObservation(): Observation {
       biomass: 42,
       pressure: 'none',
       pressureSeverity: 0,
+      atPopulationCeiling: false,
     },
     organisms: [],
     resources: [],

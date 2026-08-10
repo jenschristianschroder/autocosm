@@ -132,15 +132,22 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     }
   }
 
-  // 5. Reproduce when mature, energetic and motivated.
+  // 5. Reproduce when mature, energetic, motivated — and when the world has room.
   //
-  //    The refractory check comes first because this branch *returns*: proposing a birth the
-  //    simulation will refuse costs the organism its entire turn, and measurement showed that
-  //    was over half of every rejection in the world.
+  //    Every precondition the resolver checks is checked here first, because this branch
+  //    *returns*: proposing a birth the simulation will refuse costs the organism its entire
+  //    turn — it never reaches feed, gather, build, combine, teach or explore.
+  //
+  //    The refractory check was added when cooldown was over half of every rejection in the
+  //    world. The ceiling check is the same lesson learned a second time: once a world fills,
+  //    `population` became 99% of all rejections (19,485 / 27,953 / 21,385 over 1500 ticks
+  //    across three seeds), and production sat at 421 of 420 organisms with zero structures
+  //    and no gather, build or combine anywhere in a 200-event window.
   if (
     can.has('reproduce') &&
     self.mature &&
     self.reproductionReady &&
+    !observation.environment.atPopulationCeiling &&
     energyRatio > 700 &&
     healthRatio > 600
   ) {

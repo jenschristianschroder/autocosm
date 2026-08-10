@@ -306,6 +306,13 @@ const REJECTION_REASON_TEXT: Readonly<Record<RejectionReason, GlossaryEntry>> = 
     label: 'Action unavailable',
     summary: 'The action cannot be taken in this situation at all.',
   },
+  population: {
+    id: 'population',
+    label: 'World is full',
+    summary:
+      'The world already holds as many living organisms as it can support, so no offspring can ' +
+      'be born until something dies. The parent is healthy and off cooldown — only room is missing.',
+  },
 });
 
 const DECISION_REASON_TEXT: Readonly<Record<DecisionReason, GlossaryEntry>> = Object.freeze({

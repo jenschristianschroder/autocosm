@@ -123,10 +123,16 @@ export function livingOrganismIds(draft: WorldDraft): OrganismId[] {
  *
  * The organism map also holds recently dead organisms, so `organisms.size` is not the
  * population. Anything enforcing a population limit must count through this.
+ *
+ * Typed to the readonly shape it actually reads rather than to `WorldDraft`, so the
+ * observation layer can derive `atPopulationCeiling` from the *same* function the resolver
+ * gates on. A second copy of this loop is exactly how a rule and its observable drift apart.
  */
-export function countLivingOrganisms(draft: WorldDraft): number {
+export function countLivingOrganisms(source: {
+  readonly organisms: ReadonlyMap<OrganismId, Organism>;
+}): number {
   let living = 0;
-  for (const organism of draft.organisms.values()) {
+  for (const organism of source.organisms.values()) {
     if (organism.alive) living += 1;
   }
   return living;

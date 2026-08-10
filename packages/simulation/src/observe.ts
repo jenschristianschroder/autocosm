@@ -27,7 +27,7 @@ import {
 } from '@autocosm/domain';
 import { availableActions } from './capabilities.js';
 import { DEFAULT_SIMULATION_CONFIG, type SimulationConfig } from './config.js';
-import { sortedIds, type WorldState } from './state.js';
+import { sortedIds, countLivingOrganisms, type WorldState } from './state.js';
 
 /**
  * Extra sight range granted to a construction, in cu, capped by its own bulk. Structures are
@@ -141,6 +141,10 @@ export function observe(
     biomass: region?.biomass ?? 0,
     pressure: draft.world.pressure.kind,
     pressureSeverity: draft.world.pressure.severity,
+    // Derived from the same helper and the same config field the resolver gates on
+    // (`evolution.ts` -> `countLivingOrganisms(draft) >= config.maxOrganisms`), so the
+    // observable and the rule cannot drift into disagreeing.
+    atPopulationCeiling: countLivingOrganisms(draft) >= config.maxOrganisms,
   };
 
   const organisms: ObservedOrganism[] = [];
