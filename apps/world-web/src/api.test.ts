@@ -258,6 +258,10 @@ describe('read routes', () => {
     expect(glossary.structureFunctions.length).toBe(10);
     expect(glossary.traits.length).toBeGreaterThan(0);
     expect(glossary.rejectionReasons.length).toBeGreaterThan(0);
+    // Crafting can now push a property past every ingredient that made it. That is the least
+    // intuitive rule in the world, so the route must explain it rather than leave a spectator to
+    // infer it from a number that does not add up.
+    expect(glossary.materialReactions.length).toBeGreaterThan(0);
   });
 
   it('rejects an out-of-range snapshot radius rather than clamping silently', async () => {

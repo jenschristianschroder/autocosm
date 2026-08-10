@@ -1,6 +1,10 @@
 import { REJECTION_REASONS, type RejectionReason } from './actions.js';
 import { DEATH_CAUSES, type DeathCause, SIGNAL_CHANNELS, type SignalChannel } from './entities.js';
-import { MATERIAL_PROPERTY_IDS, type MaterialPropertyId } from './materials.js';
+import {
+  MATERIAL_PROPERTY_IDS,
+  MATERIAL_REACTION_RULES,
+  type MaterialPropertyId,
+} from './materials.js';
 import { DECISION_REASONS, type DecisionReason } from './observation.js';
 import {
   STRUCTURE_FUNCTION_RULES,
@@ -44,6 +48,7 @@ export interface Glossary {
   readonly structureFunctions: readonly GlossaryEntry[];
   readonly structurePatterns: readonly GlossaryEntry[];
   readonly materialProperties: readonly GlossaryEntry[];
+  readonly materialReactions: readonly GlossaryEntry[];
   readonly traits: readonly GlossaryEntry[];
   readonly signalChannels: readonly GlossaryEntry[];
   readonly deathCauses: readonly GlossaryEntry[];
@@ -377,6 +382,14 @@ export function buildGlossary(): Glossary {
     })),
     structurePatterns: STRUCTURE_PATTERNS.map((id) => STRUCTURE_PATTERN_TEXT[id]),
     materialProperties: MATERIAL_PROPERTY_IDS.map((id) => MATERIAL_PROPERTY_TEXT[id]),
+    // Projected from the rules themselves, like structure functions above, so the prose a
+    // spectator reads and the threshold the simulation applies cannot drift apart.
+    materialReactions: MATERIAL_REACTION_RULES.map((rule): GlossaryEntry => ({
+      id: rule.id,
+      label: rule.label,
+      summary: rule.summary,
+      detail: rule.requirement,
+    })),
     traits: TRAIT_IDS.map((id): GlossaryEntry => {
       const trait = TRAIT_CATALOGUE[id];
       return {

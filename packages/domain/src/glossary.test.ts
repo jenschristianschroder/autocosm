@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { DECISION_REASONS } from './observation.js';
 import { REJECTION_REASONS } from './actions.js';
 import { DEATH_CAUSES, SIGNAL_CHANNELS } from './entities.js';
-import { MATERIAL_PROPERTY_IDS } from './materials.js';
+import { MATERIAL_PROPERTY_IDS, REACTION_IDS } from './materials.js';
 import { STRUCTURE_FUNCTIONS, STRUCTURE_PATTERNS } from './structures.js';
 import { TRAIT_IDS } from './traits.js';
 import { buildGlossary, structureFunctionEntry, type GlossaryEntry } from './glossary.js';
@@ -31,6 +31,7 @@ const SECTIONS: readonly {
   },
   { name: 'structurePatterns', entries: glossary.structurePatterns, ids: STRUCTURE_PATTERNS },
   { name: 'materialProperties', entries: glossary.materialProperties, ids: MATERIAL_PROPERTY_IDS },
+  { name: 'materialReactions', entries: glossary.materialReactions, ids: REACTION_IDS },
   { name: 'traits', entries: glossary.traits, ids: TRAIT_IDS },
   { name: 'signalChannels', entries: glossary.signalChannels, ids: SIGNAL_CHANNELS },
   { name: 'deathCauses', entries: glossary.deathCauses, ids: DEATH_CAUSES },
@@ -56,7 +57,7 @@ describe('glossary completeness', () => {
   });
 
   it('covers every enum the product renders, not just the ones that were easy', () => {
-    expect(SECTIONS).toHaveLength(8);
+    expect(SECTIONS).toHaveLength(9);
     for (const section of SECTIONS) {
       expect(section.ids.length, section.name).toBeGreaterThan(0);
     }

@@ -104,7 +104,42 @@ export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = Object.freeze({
   // asymptote is 347. The fixed point tracks living population and region occupancy, both of which
   // the deposit-visibility fix raised sharply (26 -> 137-259 alive, 9 -> 17-23 regions), so 1.26x
   // headroom did not survive a single balance change. 512 is ~1.5x the highest measured asymptote.
-  maxMaterials: 512,
+  //
+  // Re-measured after the population-ceiling observable landed, and the prediction in the line
+  // above held: the asymptote moved 347 -> 431 (seed 7), because organisms that stop burning
+  // every turn on a doomed reproduction proposal spend those turns gathering and combining
+  // instead.
+  //
+  // Outgrown a *third* time, by the material-reaction rules, and this time it is recorded rather
+  // than fixed. Reactions change composite properties, which changes what heuristics gather and
+  // combine, which moves the fixed point again. Seed 7 / worldId `wd-probe` over 2000 ticks:
+  //
+  //     cap 512     -> 512 materials, last discovery 1640, 3 combine rejections
+  //     cap 100 000 -> 514 materials, last discovery 1729, 0 combine rejections
+  //
+  // So the bound bit at 512, and the regression test's stated invariant — discovery ends
+  // *strictly* below the bound — was violated on that trajectory. The alarm did not fire because
+  // the test covers two seeds against one worldId (`w-mat`), and worldId alone moves a trajectory
+  // as much as a seed does. That coverage gap is the real defect; the 2-material clip is 0.4%.
+  //
+  // Deliberately raised only to the read-model catalogue cap, not further, because beyond that
+  // point it stops being a tuning question:
+  //   - 514 is not a converged asymptote. Discovery was still active at tick 1729 of 2000, only
+  //     271 ticks of silence, against the 1000-2300 ticks that justified every earlier number
+  //     here. Choosing a persistence bound off an unconverged count is the mistake this comment
+  //     already records twice, so 576 is taken as *free* headroom rather than as a measured one.
+  //   - The catalogue cannot follow it upward indefinitely. Measured at ~1085 bytes for a
+  //     worst-case composite DTO, a 1024-material catalogue is ~488 KB typical and ~1.06 MB worst
+  //     case on `/world`. 576 (~275 KB) is already near the practical limit for a polled route,
+  //     and the catalogue must stay >= this bound or it silently drops an arbitrary alphabetical
+  //     tail — taking each dropped material's label *and* its reaction attribution with it, which
+  //     is the exact illegibility Phase A spent five commits removing.
+  //   - A world of 500+ materials is already past what a spectator can comprehend, so "more
+  //     chemistry" is not self-evidently the goal it looks like.
+  // Going above 576 therefore trades payload and legibility against open-endedness, and wants a
+  // converged measurement plus a *selective* catalogue — one that keeps every material the world
+  // currently references rather than an alphabetical prefix — not a larger constant.
+  maxMaterials: 576,
   maxDecisionsPerTick: 12,
   decisionExpiryTicks: 40,
   minTicksBetweenDecisionsPerLineage: 6,

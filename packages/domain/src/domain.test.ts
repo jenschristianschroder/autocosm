@@ -707,7 +707,7 @@ describe('materials', () => {
     expect(totalVolume([{ materialId: asMaterialId('sand'), quantity: -50 }])).toBe(0);
   });
 
-  it('combines materials lossily and refuses impossible combinations', () => {
+  it('combines materials within bounds and refuses impossible combinations', () => {
     const components: MaterialComponent[] = [
       { materialId: asMaterialId('sand'), quantity: 60 },
       { materialId: asMaterialId('resin'), quantity: 40 },
@@ -722,7 +722,9 @@ describe('materials', () => {
     // The name is derived from the finished material, never supplied by the caller.
     expect(composite.label).toBe(deriveMaterialName(composite).label);
 
-    // Binding fills voids and stiffens; nutrition is at most the mean, never more.
+    // Binding fills voids and stiffens; nutrition is at most the mean, never more. `sand + resin`
+    // triggers no property reaction, so this pair still shows the plain contractive path — the
+    // escape from it is covered in `reactions.test.ts`.
     const blended = blendProperties(components, catalogue);
     expect(composite.properties.hardness).toBeGreaterThanOrEqual(blended.hardness);
     expect(composite.properties.porosity).toBeLessThanOrEqual(blended.porosity);

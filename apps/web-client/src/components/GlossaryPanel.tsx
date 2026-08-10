@@ -29,6 +29,7 @@ const SECTION_TITLES: Readonly<Record<SectionKey, string>> = {
   structureFunctions: 'What buildings do',
   structurePatterns: 'Building patterns',
   materialProperties: 'Material properties',
+  materialReactions: 'How crafting transforms matter',
   traits: 'Heritable traits',
   signalChannels: 'Signal channels',
   deathCauses: 'Causes of death',

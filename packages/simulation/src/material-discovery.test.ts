@@ -108,14 +108,21 @@ describe('material discovery is bounded by chemistry, not by a counter', () => {
   const worlds: Run[] = [];
 
   beforeAll(() => {
-    worlds.push(run(4_242_424, 'w-mat'), run(7, 'w-mat'));
+    // Three trajectories, and the third exists because two were not enough. This file's alarm —
+    // "discovery stops strictly below the bound" — failed to fire on a world that genuinely was
+    // truncated: seed 7 under worldId `wd-probe` reached exactly 512 of a 512 bound, while the
+    // same seed unclipped reaches 514. Both prior trajectories share the worldId `w-mat`, and
+    // worldId moves a trajectory as much as a seed does (it is mixed into the same PRNG), so two
+    // seeds against one worldId is one axis of coverage, not two. `wd-probe` is carried here
+    // permanently as the trajectory that once slipped past.
+    worlds.push(run(4_242_424, 'w-mat'), run(7, 'w-mat'), run(7, 'wd-probe'));
   }, TIMEOUT_MS);
 
-  it('built both worlds', () => {
+  it('built every world', () => {
     // Every assertion below iterates `worlds`, so an empty array would make all four pass
     // vacuously. This file has already found four bounds that never bound and three mechanisms
     // that never fired; an assertion that cannot fail is the same defect class one level up.
-    expect(worlds).toHaveLength(2);
+    expect(worlds).toHaveLength(3);
   });
 
   it('discovers past the old ceiling', () => {

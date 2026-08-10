@@ -12,6 +12,7 @@ import {
   derivePhenotype,
   deriveMaterialId,
   deriveMaterialName,
+  explainedReactions,
   deriveVisual,
   effectiveTrait,
   functionMagnitude,
@@ -25,6 +26,7 @@ import {
   type Genotype,
   type LineageDetailResponse,
   type MaterialId,
+  type MaterialDefinition,
   type OrganismDetailResponse,
   type Region,
   type SnapshotResponse,
@@ -294,7 +296,22 @@ function materialCatalogue(state: WorldState): WorldMetaResponse['materials'] {
       ...(material.discoveredAtTick === undefined
         ? {}
         : { discoveredAtTick: material.discoveredAtTick }),
+      ...reactionsFragment(material, state.materials),
     }));
+}
+
+/**
+ * Reaction attribution, omitted entirely when there is none to make.
+ *
+ * Kept as a fragment rather than an empty array so the response stays byte-identical for a world
+ * of base materials, which is what makes the ETag on this route worth having.
+ */
+function reactionsFragment(
+  material: MaterialDefinition,
+  catalogue: ReadonlyMap<MaterialId, MaterialDefinition>,
+): { readonly reactions?: string[] } {
+  const reactions = explainedReactions(material, catalogue);
+  return reactions.length === 0 ? {} : { reactions: [...reactions] };
 }
 
 /** Fallback genome for an agent whose lineage record is missing; keeps the response total. */

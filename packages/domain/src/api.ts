@@ -484,10 +484,16 @@ export const WorldMetaResponseSchema = z.object({
    * A client that meets an unknown material id refetches `/world` rather than growing every frame.
    *
    * This bound is the outermost link in a chain that has to stay ordered:
-   * `maxMaterials` (512) <= `MAX_CATALOGUE_MATERIALS` (576) <= this. Invert any pair and a full
+   * `maxMaterials` (576) <= `MAX_CATALOGUE_MATERIALS` (576) <= this. Invert any pair and a full
    * world either loses an arbitrary alphabetical tail of its catalogue or fails to serve `/world`
    * at all. `read-model.test.ts` asserts the chain end to end against a saturated catalogue rather
    * than by comparing the constants, so a future rise in `maxMaterials` fails loudly here.
+   *
+   * All three now sit at the same value, so the chain is saturated: the simulation may discover
+   * exactly as much chemistry as the catalogue can carry, and not one material more. Raising the
+   * simulation bound from here therefore cannot be done alone — it costs `/world` payload directly
+   * (~1085 bytes per worst-case composite, so ~488 KB at 1024 materials) and wants a catalogue that
+   * selects the materials the world actually references rather than an alphabetical prefix.
    */
   materials: z
     .array(
@@ -509,6 +515,11 @@ export const WorldMetaResponseSchema = z.object({
           .max(8)
           .optional(),
         discoveredAtTick: z.number().int().min(0).optional(),
+        /**
+         * Which crafting reactions produced this material. Absent for base materials, and for
+         * composites whose stored properties predate the current rules — see `explainedReactions`.
+         */
+        reactions: z.array(z.string().max(40)).max(8).optional(),
       }),
     )
     .max(576),
@@ -560,6 +571,7 @@ export const GlossaryResponseSchema = z.object({
   structureFunctions: z.array(GlossaryEntrySchema).max(32),
   structurePatterns: z.array(GlossaryEntrySchema).max(32),
   materialProperties: z.array(GlossaryEntrySchema).max(32),
+  materialReactions: z.array(GlossaryEntrySchema).max(32),
   traits: z.array(GlossaryEntrySchema).max(64),
   signalChannels: z.array(GlossaryEntrySchema).max(16),
   deathCauses: z.array(GlossaryEntrySchema).max(16),

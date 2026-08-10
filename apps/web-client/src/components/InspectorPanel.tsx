@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { JSX } from 'react';
-import { MATERIAL_PROPERTY_IDS } from '@autocosm/domain';
+import { MATERIAL_PROPERTY_IDS, MATERIAL_REACTION_RULES } from '@autocosm/domain';
 import { fetchAgent, fetchOrganism, fetchStructure } from '../api';
 import { lineageColour } from '../lineage-colour';
 import { regionCellOf } from '../region';
@@ -275,6 +275,7 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
                 </li>
               ))}
             </ul>
+            <MaterialReactions components={structure.components} materials={props.materials} />
 
             <h3>What it does</h3>
             {structure.derivedFunctions.length === 0 ? (
@@ -518,6 +519,48 @@ function FollowButton(props: { following: boolean; onToggle: () => void }): JSX.
     >
       {props.following ? 'Stop following' : 'Follow'}
     </button>
+  );
+}
+
+/**
+ * Why a structure's crafted materials beat the ingredients that made them.
+ *
+ * Rendered against a structure rather than a resource node, because resource nodes only ever hold
+ * base materials — a reaction can never appear there, so putting the explanation on that panel
+ * would have shipped a feature no spectator could reach.
+ *
+ * Crafting is the one place in the world where a number can exceed everything that produced it, so
+ * a composite with conductivity higher than either ingredient is otherwise unreadable. The rules
+ * come from the domain rather than the glossary route so the text needs no second request and
+ * cannot drift from the thresholds the simulation actually applies.
+ */
+function MaterialReactions(props: {
+  components: readonly { readonly materialId: string }[];
+  materials: readonly MaterialDto[] | undefined;
+}): JSX.Element | null {
+  const fired = new Set<string>();
+  for (const component of props.components) {
+    const material = props.materials?.find((m) => m.id === component.materialId);
+    for (const id of material?.reactions ?? []) fired.add(id);
+  }
+  if (fired.size === 0) return null;
+  return (
+    <>
+      <h3>How its materials were made</h3>
+      <ul className="definitions">
+        {[...fired].map((id) => {
+          const rule = MATERIAL_REACTION_RULES.find((entry) => entry.id === id);
+          return (
+            <li key={id}>
+              <strong>{rule?.label ?? id}</strong>{' '}
+              <span className="muted small">
+                {rule?.summary ?? 'A reaction during combination.'}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
 
