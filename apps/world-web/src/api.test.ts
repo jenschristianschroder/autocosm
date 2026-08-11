@@ -38,7 +38,7 @@ const VALID_AGENT = {
 
 async function harness(
   overrides: Partial<Record<string, unknown>> = {},
-  options: { ticks?: number; seedWorld?: boolean } = {},
+  options: { ticks?: number; seedWorld?: boolean; aiDegraded?: () => boolean } = {},
 ) {
   const repository = new InMemoryWorldRepository();
   await repository.initialise();
@@ -74,6 +74,7 @@ async function harness(
     identity: new SignedCookieCreatorIdentity('a-test-signing-key-of-length'),
     logger: new Logger({ sink: memorySink(logs), level: 'error' }),
     metrics: new Metrics(),
+    ...(options.aiDegraded === undefined ? {} : { aiDegraded: options.aiDegraded }),
   });
 
   return { app, repository, world, config, logs };
@@ -229,6 +230,94 @@ describe('read routes', () => {
     await app.close();
     expect(second.statusCode).toBe(304);
     expect(second.body).toBe('');
+  });
+
+  /**
+   * Every route that emits an ETag must also honour one.
+   *
+   * `/world` emitted an ETag from the day it shipped and never compared against `if-none-match`,
+   * so the header was decorative: a polling spectator re-downloaded the entire material catalogue
+   * every `snapshotCacheSeconds`, and the server re-derived every subtitle and re-ran
+   * `explainedReactions` over every composite to build a body it had already sent. Confirmed
+   * against the deployment before the fix — `/world` answered 200 with the full 47 kB body when
+   * given its own current ETag, while `/snapshot` correctly answered 304.
+   *
+   * The read model's own comment claimed the opposite ("sorted for byte-stability and therefore
+   * ETag-cached: a spectator fetches it once and then receives 304s"), which is why this is driven
+   * from the route table rather than written per route: a future cacheable route that forgets the
+   * branch fails here instead of quietly costing every spectator a full body per poll.
+   */
+  it('honours a conditional GET on every route that advertises an ETag', async () => {
+    const { app } = await harness();
+    const urls = ['/api/v1/snapshot', '/api/v1/world', '/api/v1/glossary'];
+
+    const results: { url: string; etag: string; conditional: number; stale: number }[] = [];
+    for (const url of urls) {
+      const first = await app.inject({ method: 'GET', url });
+      const etag = String(first.headers.etag);
+      const conditional = await app.inject({
+        method: 'GET',
+        url,
+        headers: { 'if-none-match': etag },
+      });
+      const stale = await app.inject({
+        method: 'GET',
+        url,
+        headers: { 'if-none-match': '"definitely-not-the-current-etag"' },
+      });
+      results.push({
+        url,
+        etag,
+        conditional: conditional.statusCode,
+        stale: stale.statusCode,
+      });
+      // A 304 that also carries a body would defeat the point of sending it.
+      if (conditional.statusCode === 304) expect(conditional.body).toBe('');
+    }
+    await app.close();
+
+    for (const result of results) {
+      expect(result.etag).not.toBe('undefined');
+      expect({ url: result.url, code: result.conditional }).toEqual({ url: result.url, code: 304 });
+      // The other half of the property: a *stale* validator must still be served in full, or the
+      // route would be returning 304 unconditionally and a spectator would never see the world move.
+      expect({ url: result.url, code: result.stale }).toEqual({ url: result.url, code: 200 });
+    }
+  });
+
+  /**
+   * A conditional GET must not outlive the thing it validates.
+   *
+   * `/world` reports `aiDegraded`, which is not part of the world record and therefore not part of
+   * the world ETag. A provider fails independently of any tick — and typically *stalls* ticks, so
+   * the world record stops changing at the same moment the banner needs to change. Validating on
+   * the world ETag alone would have let a spectator hold "AI healthy" for as long as the outage
+   * lasted, and the 304 would have looked like it was working.
+   */
+  it('stops serving 304 when the provider degrades, even though the world is unchanged', async () => {
+    let degraded = false;
+    const { app } = await harness({}, { aiDegraded: () => degraded });
+
+    const first = await app.inject({ method: 'GET', url: '/api/v1/world' });
+    const etag = String(first.headers.etag);
+    const unchanged = await app.inject({
+      method: 'GET',
+      url: '/api/v1/world',
+      headers: { 'if-none-match': etag },
+    });
+
+    degraded = true;
+    const afterOutage = await app.inject({
+      method: 'GET',
+      url: '/api/v1/world',
+      headers: { 'if-none-match': etag },
+    });
+    await app.close();
+
+    expect(unchanged.statusCode).toBe(304);
+    expect(afterOutage.statusCode).toBe(200);
+    expect(String(afterOutage.headers.etag)).not.toBe(etag);
+    expect((afterOutage.json() as { aiDegraded?: boolean }).aiDegraded).toBe(true);
   });
 
   it('serves world metadata and event history', async () => {

@@ -71,8 +71,37 @@ async function toError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, code, message, details);
 }
 
-export async function fetchWorldMeta(): Promise<WorldMetaResponse> {
-  return request<WorldMetaResponse>('/world');
+/**
+ * Conditional world-meta fetch. A 304 returns the previous value untouched.
+ *
+ * This is polled on the same cadence as the snapshot, and it is by far the larger of the two: the
+ * material catalogue is ~88% of the body and grows with the world's chemistry. Sending a validator
+ * is therefore not an optimisation but the difference between paying for the catalogue once per
+ * world change and paying for it every couple of seconds, forever.
+ *
+ * `previous` is required for the 304 path to be usable; without it there is nothing to return, so
+ * a caller that omits it silently degrades to an unconditional fetch rather than failing.
+ */
+export async function fetchWorldMeta(
+  options: { etag?: string; previous?: WorldMetaResponse } = {},
+): Promise<Cached<WorldMetaResponse>> {
+  const response = await fetch(`${BASE}/world`, {
+    headers: {
+      Accept: 'application/json',
+      ...(options.etag === undefined || options.previous === undefined
+        ? {}
+        : { 'If-None-Match': options.etag }),
+    },
+    credentials: 'same-origin',
+  });
+
+  if (response.status === 304 && options.previous) {
+    return { value: options.previous, unchanged: true, ...tagOf(options.etag) };
+  }
+  if (!response.ok) throw await toError(response);
+
+  const value = (await response.json()) as WorldMetaResponse;
+  return { value, unchanged: false, ...tagOf(response.headers.get('ETag') ?? undefined) };
 }
 
 /** Conditional snapshot fetch. A 304 returns the previous value untouched. */

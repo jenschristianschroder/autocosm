@@ -47,14 +47,17 @@ export function useWorldFeed(): WorldFeed {
   const [intervalMs, setIntervalMs] = useState(BASE_INTERVAL_MS);
   const [nonce, setNonce] = useState(0);
 
-  const etagRef = useRef<string | undefined>(undefined);
+  const snapshotEtagRef = useRef<string | undefined>(undefined);
   const snapshotRef = useRef<SnapshotResponse | undefined>(undefined);
+  const metaEtagRef = useRef<string | undefined>(undefined);
+  const metaRef = useRef<WorldMetaResponse | undefined>(undefined);
   const failuresRef = useRef(0);
   const startedRef = useRef(false);
 
   const setRegion = useCallback((next: string | undefined) => {
     // A different window is a different resource: the old ETag would produce a bogus 304.
-    etagRef.current = undefined;
+    // World meta is not region-scoped, so its validator deliberately survives a region change.
+    snapshotEtagRef.current = undefined;
     setRegionIdState(next);
   }, []);
 
@@ -85,12 +88,15 @@ export function useWorldFeed(): WorldFeed {
       if (!startedRef.current) setConnection('coldStart');
 
       try {
-        const [nextMeta, cached] = await Promise.all([
-          fetchWorldMeta(),
+        const [cachedMeta, cached] = await Promise.all([
+          fetchWorldMeta({
+            ...(metaEtagRef.current === undefined ? {} : { etag: metaEtagRef.current }),
+            ...(metaRef.current === undefined ? {} : { previous: metaRef.current }),
+          }),
           fetchSnapshot({
             ...(regionId === undefined ? {} : { regionId }),
             radius: 1,
-            ...(etagRef.current === undefined ? {} : { etag: etagRef.current }),
+            ...(snapshotEtagRef.current === undefined ? {} : { etag: snapshotEtagRef.current }),
             ...(snapshotRef.current === undefined ? {} : { previous: snapshotRef.current }),
           }) as Promise<Cached<SnapshotResponse>>,
         ]);
@@ -98,8 +104,12 @@ export function useWorldFeed(): WorldFeed {
 
         failuresRef.current = 0;
         startedRef.current = true;
-        etagRef.current = cached.etag;
-        setMeta(nextMeta);
+        snapshotEtagRef.current = cached.etag;
+        metaEtagRef.current = cachedMeta.etag;
+        // On a 304 this is the identical object, so `setMeta` bails out and nothing downstream
+        // re-renders — the catalogue is stable between world changes and should cost nothing.
+        metaRef.current = cachedMeta.value;
+        setMeta(cachedMeta.value);
         setErrorMessage(undefined);
 
         if (!cached.unchanged) {

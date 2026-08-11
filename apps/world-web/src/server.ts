@@ -308,17 +308,23 @@ function registerRoutes(app: FastifyInstance, deps: RouteDependencies): void {
     });
   });
 
-  app.get(`${PREFIX}/world`, async (_req, reply) => {
-    const { state, etag } = await world.load();
+  app.get(`${PREFIX}/world`, async (req, reply) => {
+    const { state, etag: worldEtag } = await world.load();
+    const flags = { heuristicOnly: config.heuristicOnly, aiDegraded: deps.aiDegraded() };
+    const etag = worldMetaEtag(worldEtag, flags);
+    // The material catalogue is the bulk of this response and it is the reason the conditional GET
+    // matters more here than on `/snapshot`. Without this branch the route emitted an ETag that
+    // nothing ever honoured, so every poll re-derived every subtitle, re-ran `explainedReactions`
+    // over every composite, and re-sent the whole catalogue — measured at 480 bytes per material,
+    // which is ~276 kB at a saturated 576 and was being resent every `snapshotCacheSeconds` (2).
+    if (matchesEtag(req.headers['if-none-match'], etag)) {
+      void reply.code(304).header('etag', etag).send();
+      return;
+    }
     void reply
       .header('etag', etag)
       .header('cache-control', `public, max-age=${config.snapshotCacheSeconds}`)
-      .send(
-        composeWorldMeta(state, {
-          heuristicOnly: config.heuristicOnly,
-          aiDegraded: deps.aiDegraded(),
-        }),
-      );
+      .send(composeWorldMeta(state, flags));
   });
 
   app.get(`${PREFIX}/snapshot`, async (req, reply) => {
@@ -383,10 +389,18 @@ function registerRoutes(app: FastifyInstance, deps: RouteDependencies): void {
    * cache hard. `GLOSSARY_VERSION` is carried in the body and the ETag so a client that has cached
    * an older shape can tell.
    */
-  app.get(`${PREFIX}/glossary`, async (_req, reply) => {
+  app.get(`${PREFIX}/glossary`, async (req, reply) => {
+    const etag = `"glossary-v${GLOSSARY_VERSION}"`;
+    // Static for the life of a deployment, so a revalidation after `max-age` expires should cost
+    // a 304 rather than the whole body. Same omission as `/world` had: an ETag was emitted and
+    // never compared against.
+    if (matchesEtag(req.headers['if-none-match'], etag)) {
+      void reply.code(304).header('etag', etag).send();
+      return;
+    }
     void reply
       .header('cache-control', 'public, max-age=3600')
-      .header('etag', `"glossary-v${GLOSSARY_VERSION}"`)
+      .header('etag', etag)
       .send(GLOSSARY_BODY);
   });
 
@@ -463,6 +477,25 @@ function creatorCookieId(req: FastifyRequest): string | undefined {
   if (raw === undefined) return undefined;
   const match = new RegExp(`${CREATOR_COOKIE}=([^;.]+)`, 'u').exec(raw);
   return match?.[1];
+}
+
+/**
+ * `/world` is derived from more than the world record, so it cannot validate against the bare
+ * world ETag.
+ *
+ * `aiDegraded` flips independently of any tick — and it flips precisely when ticks are most likely
+ * to have stalled, since a broken provider is a common cause of both. Validating on the world ETag
+ * alone would pin a spectator to a stale "AI healthy" banner for exactly as long as the world was
+ * not advancing, which is the worst possible moment to be wrong. `heuristicOnly` is static per
+ * process and included for the same reason a version is: it costs nothing and removes a class of
+ * question.
+ */
+function worldMetaEtag(
+  worldEtag: string,
+  flags: { readonly heuristicOnly: boolean; readonly aiDegraded: boolean },
+): string {
+  const base = worldEtag.endsWith('"') ? worldEtag.slice(0, -1) : worldEtag;
+  return `${base}.h${flags.heuristicOnly ? 1 : 0}.d${flags.aiDegraded ? 1 : 0}"`;
 }
 
 function matchesEtag(header: string | string[] | undefined, etag: string): boolean {
