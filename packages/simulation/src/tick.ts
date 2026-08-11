@@ -1,5 +1,6 @@
 import {
   MAX_MEMORY_NOTE_LENGTH,
+  PER_MILLE,
   Prng,
   SIGNAL_LIFETIME_TICKS,
   WORLD_SPAN_CU,
@@ -44,6 +45,7 @@ import { decideHeuristically } from './heuristics.js';
 import { observe } from './observe.js';
 import { EnergyLedger, absorbEnergy, resolveAction, type ResolutionContext } from './resolve.js';
 import { countActiveLineages } from './speciation.js';
+import { structureEffectsAt } from './structure-effects.js';
 import {
   freezeDraft,
   livingOrganismIds,
@@ -445,10 +447,12 @@ function metabolise(
   const phenotype = derivePhenotype(organism.genotype);
   const region = draft.regions.get(organism.regionId);
   const light = ambientLightPerMille(draft.world.tick, draft.world.calendar);
+  const effects = structureEffectsAt(draft.structures, organism.position, organism.lineageId);
 
   // Photosynthesis is the only source of energy that does not come from something else.
   const effectiveLight = scaleByPerMille(light, region?.lightModifier ?? 1000);
-  const gained = scaleByPerMille(phenotype.photosynthesisAtFullLight, effectiveLight);
+  const gained =
+    scaleByPerMille(phenotype.photosynthesisAtFullLight, effectiveLight) + effects.energyPerTick;
 
   let upkeep = phenotype.upkeepPerTick;
   const pressure = draft.world.pressure;
@@ -461,12 +465,18 @@ function metabolise(
       upkeep += scaleByPerMille(phenotype.upkeepPerTick, Math.trunc(pressure.severity / 2));
     }
   }
-  // Shelter reduces exposure.
-  if (organism.attachedStructureId !== undefined) {
-    const structure = draft.structures.get(organism.attachedStructureId);
-    const shelter = structure?.functions.find((f) => f.id === 'shelter');
-    if (shelter) upkeep -= scaleByPerMille(upkeep, Math.trunc(shelter.magnitude / 2));
+  // Shelter reduces exposure, and a nursery does more of it for the young.
+  //
+  // This used to require an explicit `attach` to a structure the organism had already inspected
+  // and stood within `interactionRadiusCu` of — measured `structureUsage` across whole runs was
+  // 2/0/0, so the one real benefit any construction offered was effectively unreachable, and the
+  // traits that enable building were taxed every tick against nothing. Standing in the lee of a
+  // wall is sheltered by the wall.
+  let relief = effects.upkeepDiscountPerMille;
+  if (organism.ageTicks < phenotype.maturityAgeTicks) {
+    relief = Math.min(PER_MILLE, relief + effects.juvenileDiscountPerMille);
   }
+  if (relief > 0) upkeep -= scaleByPerMille(upkeep, relief);
   upkeep = Math.max(1, upkeep);
 
   // Photosynthesis above the storage ceiling is simply not captured, so it is never
@@ -494,6 +504,12 @@ function metabolise(
       ledger.debit(regen);
     }
   }
+
+  // A `toxinWard` raised by another lineage poisons what approaches it. Resistance is checked
+  // against the ward's strength, so a resistant body walks past one unharmed.
+  const exposure = effects.toxinExposure - organism.genotype.toxinResistance;
+  const poisoned = exposure > 0 ? Math.max(1, Math.trunc(exposure / 100)) : 0;
+  health -= poisoned;
 
   health = Math.max(0, health);
   draft.organisms.set(organism.id, { ...organism, energy, health, ageTicks });

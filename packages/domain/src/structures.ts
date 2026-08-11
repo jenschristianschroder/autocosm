@@ -110,7 +110,7 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'shelter',
     patterns: ['shell', 'lattice'],
-    summary: 'Shields organisms inside it from environmental pressure and reduces upkeep.',
+    summary: 'Shields nearby organisms from environmental pressure and reduces their upkeep.',
     requirement: 'Hardness of at least 420 and a volume of at least 120 mu.',
     evaluate: (p, v) =>
       p.hardness >= 420 && v >= 120 ? Math.trunc((p.hardness * 2) / 3) + Math.min(200, v) : 0,
@@ -118,7 +118,7 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'barrier',
     patterns: ['lattice', 'shell', 'anchor'],
-    summary: 'Blocks movement across it, holding predators or rivals away from what it encloses.',
+    summary: 'Impedes movement nearby, slowing organisms of other lineages that come close.',
     requirement: 'Hardness of at least 600 and a volume of at least 200 mu.',
     evaluate: (p, v) =>
       p.hardness >= 600 && v >= 200 ? p.hardness - 200 + Math.min(150, v / 4) : 0,
@@ -126,14 +126,14 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'snare',
     patterns: ['snare', 'mesh'],
-    summary: 'Catches and holds passing organisms, making them easier to reach.',
+    summary: 'Catches and holds passing organisms of other lineages, slowing them near it.',
     requirement: 'Adhesion of at least 600. Flexibility adds to the hold.',
     evaluate: (p) => (p.adhesion >= 600 ? p.adhesion - 300 + Math.trunc(p.flexibility / 4) : 0),
   },
   {
     id: 'conduit',
     patterns: ['conduit', 'lattice'],
-    summary: 'Carries energy along its length, letting organisms draw from a distant source.',
+    summary: 'Carries energy along its length, feeding nearby organisms a trickle every tick.',
     requirement: 'Conductivity of at least 500.',
     evaluate: (p) => (p.conductivity >= 500 ? p.conductivity - 250 : 0),
   },
@@ -147,7 +147,7 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'reservoir',
     patterns: ['vessel', 'shell'],
-    summary: 'Stores material without loss, banking a surplus against a later shortage.',
+    summary: 'Banks a surplus, letting nearby organisms carry away more than a body could hold.',
     requirement: 'Porosity of at most 250 and a volume of at least 100 mu.',
     evaluate: (p, v) =>
       p.porosity <= 250 && v >= 100 ? 600 - p.porosity + Math.min(200, v / 3) : 0,
@@ -155,7 +155,7 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'filter',
     patterns: ['mesh', 'lattice'],
-    summary: 'Separates usable matter from waste, raising the yield of what passes through it.',
+    summary: 'Separates usable matter from waste, raising the yield of nearby feeding.',
     requirement: 'Porosity between 350 and 750. Strongest at 550 — too open or too dense fails.',
     evaluate: (p) =>
       p.porosity >= 350 && p.porosity <= 750 ? 400 + (750 - Math.abs(550 - p.porosity)) / 2 : 0,
@@ -163,7 +163,7 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'nursery',
     patterns: ['shell', 'vessel'],
-    summary: 'Protects offspring through their vulnerable first ticks, raising survival.',
+    summary: 'Protects the young nearby, cutting the upkeep of organisms not yet mature.',
     requirement:
       'Hardness of at least 300, flexibility of at least 300, volume of at least 150 mu.',
     evaluate: (p, v) =>
@@ -174,7 +174,7 @@ const FUNCTION_RULES: readonly FunctionRule[] = [
   {
     id: 'toxinWard',
     patterns: [...STRUCTURE_PATTERNS],
-    summary: 'Poisons whatever approaches it, deterring organisms without toxin resistance.',
+    summary: 'Poisons organisms of other lineages that approach, unless they resist toxins.',
     requirement: 'Toxicity of at least 500. Available to every pattern.',
     evaluate: (p) => (p.toxicity >= 500 ? p.toxicity - 250 : 0),
   },

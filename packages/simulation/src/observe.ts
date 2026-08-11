@@ -28,6 +28,12 @@ import {
 import { availableActions } from './capabilities.js';
 import { DEFAULT_SIMULATION_CONFIG, type SimulationConfig } from './config.js';
 import { sortedIds, countLivingOrganisms, type WorldState } from './state.js';
+import {
+  beaconRangeBonusCu,
+  effectiveCarryCapacity,
+  effectiveSpeedCuPerTick,
+  structureEffectsAt,
+} from './structure-effects.js';
 
 /**
  * Extra sight range granted to a construction, in cu, capped by its own bulk. Structures are
@@ -39,12 +45,19 @@ const STRUCTURE_LANDMARK_BONUS_CU = 1800;
 /**
  * How far away a given construction is legible. Observation and action resolution must agree on
  * this, or an agent could see a structure it is then refused permission to inspect.
+ *
+ * Takes the structure rather than its volume so a `beacon`'s extra range cannot be applied at one
+ * call site and forgotten at the other.
  */
 export function structureVisibilityRadiusCu(
   perceptionRadiusCu: number,
-  structureVolume: number,
+  structure: Pick<Structure, 'volume' | 'functions' | 'integrity'>,
 ): number {
-  return perceptionRadiusCu + Math.min(STRUCTURE_LANDMARK_BONUS_CU, structureVolume * 8);
+  return (
+    perceptionRadiusCu +
+    Math.min(STRUCTURE_LANDMARK_BONUS_CU, structure.volume * 8) +
+    beaconRangeBonusCu(structure)
+  );
 }
 
 /**
@@ -91,6 +104,11 @@ export function observe(
   const region = draft.regions.get(organism.regionId);
   const radius = p.perceptionRadiusCu;
   const neighbourhood = new Set(regionNeighbourhood(organism.regionId));
+  // What the constructions around this organism do for it, or to it. Reported through the fields
+  // below rather than as a separate block: an organism experiences a wider grip or a slower step,
+  // it does not reason about the building causing them. Every one of these is read identically by
+  // the resolver, so a heuristic can never propose an action the rule then refuses.
+  const effects = structureEffectsAt(draft.structures, organism.position, organism.lineageId);
 
   const self: ObservedSelf = {
     organismId: organism.id,
@@ -124,9 +142,9 @@ export function observe(
     planning: p.effectivePlanning,
     manipulation: p.manipulationScore,
     memorySlots: p.memorySlots,
-    carryCapacity: config.inventoryCapacity,
+    carryCapacity: effectiveCarryCapacity(config.inventoryCapacity, effects),
     inventorySlotLimit: MAX_INVENTORY_ENTRIES,
-    speedCuPerTick: p.speedCuPerTick,
+    speedCuPerTick: effectiveSpeedCuPerTick(p.speedCuPerTick, effects),
     moveCostPer100Cu: p.moveCostPer100Cu,
     perceptionRadiusCu: radius,
     signalRadiusCu: p.signalRadiusCu,
@@ -208,7 +226,7 @@ export function observe(
     // A construction is a static landmark far larger than an organism, so it is legible from
     // further away than a moving neighbour. Without this bonus, built objects are effectively
     // invisible in a world this size and knowledge could never cross a lineage boundary.
-    if (d > structureVisibilityRadiusCu(radius, structure.volume)) continue;
+    if (d > structureVisibilityRadiusCu(radius, structure)) continue;
     const own = structure.createdByLineageId === organism.lineageId;
     const inspected = own || knownStructures.has(structure.id);
     structures.push({

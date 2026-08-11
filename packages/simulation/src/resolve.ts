@@ -44,6 +44,12 @@ import {
 } from '@autocosm/domain';
 import { meetsRequirement } from './capabilities.js';
 import { structureVisibilityRadiusCu } from './observe.js';
+import {
+  effectiveCarryCapacity,
+  effectiveSpeedCuPerTick,
+  structureEffectsAt,
+  type StructureEffects,
+} from './structure-effects.js';
 import type { SimulationConfig } from './config.js';
 import type { WorldDraft } from './state.js';
 import type { EventSink } from './events.js';
@@ -112,6 +118,17 @@ export function absorbEnergy(current: number, amount: number, maxEnergy: number)
   return Math.max(0, Math.min(maxEnergy, current + amount) - current);
 }
 
+/**
+ * What the constructions around an organism do for it, or to it, right now.
+ *
+ * Recomputed per resolution rather than passed in from the observation: the resolver must never
+ * trust a value that reached it through an agent, and re-deriving from the draft is what keeps the
+ * two in agreement. Bounded by the number of standing structures, which the world caps.
+ */
+function effectsAround(ctx: ResolutionContext, organism: Organism): StructureEffects {
+  return structureEffectsAt(ctx.draft.structures, organism.position, organism.lineageId);
+}
+
 export function resolveAction(
   ctx: ResolutionContext,
   organismId: Organism['id'],
@@ -173,11 +190,14 @@ function applyMove(
   phenotype: Phenotype,
   target: { readonly x: number; readonly z: number },
 ): Resolution {
-  if (phenotype.speedCuPerTick <= 20 && phenotype.moveCostPer100Cu > organism.energy) {
+  // A barrier or a snare belonging to another lineage withholds part of the step. Never all of
+  // it — see `effectiveSpeedCuPerTick`, which floors at 1 so nothing can be pinned permanently.
+  const speed = effectiveSpeedCuPerTick(phenotype.speedCuPerTick, effectsAround(ctx, organism));
+  if (speed <= 20 && phenotype.moveCostPer100Cu > organism.energy) {
     return reject('insufficientEnergy');
   }
   const desired = makePosition(target.x, target.z);
-  const next = stepToward(organism.position, desired, phenotype.speedCuPerTick);
+  const next = stepToward(organism.position, desired, speed);
   const travelled = distance(organism.position, next);
   if (travelled === 0) return ACCEPTED;
   const cost = Math.max(1, Math.trunc((travelled * phenotype.moveCostPer100Cu) / 100));
@@ -217,6 +237,8 @@ function applyConsume(
   phenotype: Phenotype,
   action: Extract<AgentAction, { type: 'consume' }>,
 ): Resolution {
+  // A `filter` standing here separates usable matter from waste, so more of a mouthful counts.
+  const yieldBonus = effectsAround(ctx, organism).feedingYieldPerMille;
   if (action.targetKind === 'biomass') {
     const region = ctx.draft.regions.get(organism.regionId);
     if (!region) return reject('unknownTarget');
@@ -226,7 +248,8 @@ function applyConsume(
     );
     const taken = Math.min(region.biomass, appetite);
     if (taken <= 0) return reject('unknownTarget');
-    const gained = taken * ctx.config.energyPerBiomassUnit;
+    const base = taken * ctx.config.energyPerBiomassUnit;
+    const gained = base + scaleByPerMille(base, yieldBonus);
     const absorbed = absorbEnergy(organism.energy, gained, phenotype.maxEnergy);
     ctx.draft.regions.set(region.id, { ...region, biomass: region.biomass - taken });
     // Grazing converts stored regional biomass into organism energy: net world inflow.
@@ -261,7 +284,8 @@ function applyConsume(
     const taken = Math.min(node.quantity, appetite);
     const toxicity = definition.properties.toxicity;
     const resistance = organism.genotype.toxinResistance;
-    const gained = taken * definition.nutritionPerUnit;
+    const base = taken * definition.nutritionPerUnit;
+    const gained = base + scaleByPerMille(base, yieldBonus);
     const harm =
       toxicity > resistance ? Math.max(1, Math.trunc(((toxicity - resistance) * taken) / 200)) : 0;
 
@@ -471,7 +495,14 @@ function applyCollect(
     return reject('outOfRange');
   }
   const carried = organism.inventory.reduce((sum, e) => sum + e.quantity, 0);
-  const headroom = ctx.config.inventoryCapacity - carried;
+  // A `reservoir` in reach banks a surplus, so more can be carried away from here than a body
+  // alone could hold. `ObservedSelf.carryCapacity` reads the same helper — a gate looser than the
+  // rule it guards is what made `collect/inventoryFull` fire on every at-capacity tick.
+  const capacity = effectiveCarryCapacity(
+    ctx.config.inventoryCapacity,
+    effectsAround(ctx, organism),
+  );
+  const headroom = capacity - carried;
   if (headroom <= 0) return reject('inventoryFull');
 
   const capable = Math.max(1, scaleByPerMille(60, phenotype.manipulationScore));
@@ -688,7 +719,7 @@ function applyInspect(
     if (!structure) return reject('unknownTarget');
     if (
       distance(organism.position, structure.position) >
-      structureVisibilityRadiusCu(phenotype.perceptionRadiusCu, structure.volume)
+      structureVisibilityRadiusCu(phenotype.perceptionRadiusCu, structure)
     ) {
       return reject('notVisible');
     }
