@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { Logger } from '@autocosm/observability';
 import type {
   RawTablePage,
@@ -77,6 +77,23 @@ async function makeApp(
 }
 
 describe('admin inspector server', () => {
+  /**
+   * Pays the one-time cost of building a Fastify app outside any per-test budget.
+   *
+   * `buildAdminServer` registers plugins that Vite only transforms and imports the first time it
+   * runs, so whichever test happened to be first was charged several seconds of module resolution
+   * against vitest's default 5 000 ms. That made the timeout a lottery on machine speed rather than
+   * a bound on the handler it was written to guard: `reports health` failed here at 5 395 ms while
+   * the same commit passed in CI, and the fourteen tests behind it — doing strictly more work —
+   * finished in milliseconds each. Warming the module graph once restores the property every one of
+   * those timeouts claims to have, which is that a slow *handler* fails and a slow *import* does
+   * not.
+   */
+  beforeAll(async () => {
+    const app = await makeApp(new FakeReader());
+    await app.close();
+  }, 60_000);
+
   it('reports health', async () => {
     const app = await makeApp(new FakeReader());
     const res = await app.inject({ method: 'GET', url: '/api/health' });

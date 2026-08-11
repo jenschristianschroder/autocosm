@@ -89,7 +89,11 @@ function cookieFrom(headers: Record<string, unknown>): string {
 
 describe('observer boundary', () => {
   it('exposes exactly two mutation routes, both authoring intent rather than world state', async () => {
-    const { app } = await harness();
+    // No world is seeded: this asserts a property of the *route table*, which is fixed at build
+    // time and cannot depend on world state. Generating and ticking a world here would be both
+    // irrelevant and slow enough to time out when the suite runs under load from the simulation
+    // project's multi-thousand-tick convergence gate.
+    const { app } = await harness({}, { seedWorld: false });
     const routes = app
       .printRoutes({ commonPrefix: false })
       .split('\n')
