@@ -100,7 +100,13 @@ function fingerprint(state: WorldState): string {
         a.status,
         JSON.stringify(a.drives),
         [...a.knowledge.knownMaterialIds].join(','),
-        a.knowledge.recipes.map((r) => `${r.key}:${r.label}#${r.components.length}`).join('+'),
+        a.knowledge.recipes
+          .map(
+            (r) =>
+              `${r.key}:${r.label}>${r.producesMaterialId ?? '-'}#${r.components.length}` +
+              `<${r.learnedFromLineageId ?? '-'}`,
+          )
+          .join('+'),
         [...a.knowledge.knownStructureIds].join(','),
         (state.memories.get(a.id) ?? []).map((m) => `${m.id}:${m.salience}:${m.note}`).join(';'),
         (state.goals.get(a.id) ?? []).map((g) => `${g.id}:${g.status}`).join(';'),
@@ -218,5 +224,103 @@ describe('world persistence projection', () => {
     for (const lineage of restored.lineages.values()) {
       expect(lineage.foundingGenotype).toStrictEqual(lineage.meanGenotype);
     }
+  });
+
+  it('re-keys a recipe stored under the old material-identity scheme', () => {
+    // Splitting `mx` (a substance) from `rx` (a procedure) changed what `deriveRecipeKey` returns.
+    // A stored key is a cache of a pure function, so a stale one is not merely cosmetic: the
+    // `some(r => r.key === key)` dedupe in `learnRecipe` would miss it and the agent would end up
+    // holding the same procedure twice, once under each scheme.
+    const bundle = toRecords(generateWorld({ seed: SEED, worldId: 'w-persist' }));
+    const first = bundle.agents[0];
+    if (!first) throw new Error('expected a generated agent');
+
+    const components = [
+      { materialId: 'mat-fibre', quantity: 2 },
+      { materialId: 'mat-chitin', quantity: 3 },
+    ];
+    const legacy: typeof bundle = {
+      ...bundle,
+      agents: bundle.agents.map((agent) =>
+        agent === first
+          ? {
+              ...agent,
+              knowledge: {
+                ...agent.knowledge,
+                // The same procedure recorded twice: once under the superseded key, once fresh.
+                recipes: [
+                  { key: 'mxdeadbe', label: 'Legacy weave', components, learnedAtTick: 4 },
+                  {
+                    key: 'rx0000ff',
+                    label: 'Legacy weave',
+                    components,
+                    producesMaterialId: 'mat-fibre',
+                    learnedAtTick: 9,
+                  },
+                ],
+              },
+            }
+          : agent,
+      ),
+    };
+
+    const restored = fromRecords(legacy);
+    const agent = [...restored.agents.values()].find((a) => a.id === first.id);
+    if (!agent) throw new Error('expected the agent to load');
+
+    expect(agent.knowledge.recipes).toHaveLength(1);
+    const recipe = agent.knowledge.recipes[0];
+    if (!recipe) throw new Error('expected the collapsed recipe');
+    expect(recipe.key.startsWith('rx')).toBe(true);
+    // Keep-first, matching `learnRecipe`: the earliest record of the procedure survives.
+    expect(recipe.learnedAtTick).toBe(4);
+  });
+
+  it('keeps what a recipe produces across a round trip', () => {
+    // `producesMaterialId` reached the in-memory type and the DTO before it reached the record
+    // schema, which made it write-only: set on discovery, gone on the next hydrate, with the read
+    // model silently falling back to the stored label forever. Zod strips unknown keys, so nothing
+    // failed — the field simply evaporated.
+    const bundle = toRecords(generateWorld({ seed: SEED, worldId: 'w-persist' }));
+    const first = bundle.agents[0];
+    if (!first) throw new Error('expected a generated agent');
+
+    const withProduct: typeof bundle = {
+      ...bundle,
+      agents: bundle.agents.map((agent) =>
+        agent === first
+          ? {
+              ...agent,
+              knowledge: {
+                ...agent.knowledge,
+                recipes: [
+                  {
+                    key: 'rxignored',
+                    label: 'Bound Resinweave',
+                    components: [
+                      { materialId: 'mat-fibre', quantity: 2 },
+                      { materialId: 'mat-resin', quantity: 1 },
+                    ],
+                    producesMaterialId: 'mx1a2b3c',
+                    learnedAtTick: 11,
+                    learnedFromLineageId: 'ln-weavers',
+                  },
+                ],
+              },
+            }
+          : agent,
+      ),
+    };
+
+    const restored = fromRecords(withProduct);
+    const recipe = [...restored.agents.values()].find((a) => a.id === first.id)?.knowledge
+      .recipes[0];
+    if (!recipe) throw new Error('expected the recipe to load');
+    expect(recipe.producesMaterialId).toBe('mx1a2b3c');
+    expect(recipe.learnedFromLineageId).toBe('ln-weavers');
+
+    // And it must survive the write side too, which carries its own structural type.
+    const rewritten = toRecords(restored).agents.find((a) => a.id === first.id);
+    expect(rewritten?.knowledge.recipes[0]?.producesMaterialId).toBe('mx1a2b3c');
   });
 });

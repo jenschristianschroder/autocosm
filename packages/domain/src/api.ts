@@ -322,7 +322,10 @@ export const AgentDetailResponseSchema = z.object({
       z.object({
         key: z.string().max(64),
         label: z.string().max(64),
-        producesMaterialId: idSchema,
+        // Optional because material identity is physical: the product of an ingredient list is
+        // not computable without performing the blend, so a recipe learned before that rule
+        // took effect genuinely does not know what it makes.
+        producesMaterialId: idSchema.optional(),
         components: z
           .array(
             z.object({

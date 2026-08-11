@@ -18,7 +18,6 @@ import {
   clampPerMille,
   combineMaterials,
   derivePhenotype,
-  deriveMaterialId,
   deriveRecipeKey,
   deriveStructureFunctions,
   describeStructure,
@@ -37,6 +36,7 @@ import {
   type InventoryEntry,
   type LineageId,
   type MaterialComponent,
+  type MaterialId,
   type Organism,
   type Phenotype,
   type RejectionReason,
@@ -530,20 +530,24 @@ function applyCombine(
   const cost = Math.max(1, Math.trunc(volume / 4));
   if (organism.energy < cost) return reject('insufficientEnergy');
 
-  // The derived material's properties are a volume-weighted blend, and its name is derived from
-  // those properties rather than supplied by the agent.
-  const derivedId = deriveMaterialId(components);
+  // The derived material's properties are a volume-weighted blend, and both its identity and its
+  // name follow from those properties rather than from the ingredient list. Combining is therefore
+  // speculative in a way it was not before: an organism cannot know what it will get, and two
+  // different recipes may turn out to yield the same substance.
+  const candidate = combineMaterials(components, ctx.draft.materials, ctx.draft.world.tick);
+  if (!candidate) return reject('insufficientMaterial');
+  const derivedId = candidate.id;
   const existing = ctx.draft.materials.get(derivedId);
-  // Only a *new* entry can overflow the catalogue. Material ids are content-addressed, so
-  // repeating a combination resolves to the id already held and `set` leaves the size unchanged.
-  // Testing the cap before that is known bounds nothing and permanently disables all crafting the
-  // moment the catalogue saturates — which every world reaches, because discovery is one-way.
+  // Only a *new* entry can overflow the catalogue. Repeating a combination — or arriving at a known
+  // substance by a new route — resolves to an id the world already holds, and `set` leaves the size
+  // unchanged. Testing the cap before that is known bounds nothing and permanently disables all
+  // crafting the moment the catalogue saturates.
   if (!existing && ctx.draft.materials.size >= ctx.config.maxMaterials) {
     return reject('actionUnavailable');
   }
-  const definition =
-    existing ?? combineMaterials(derivedId, components, ctx.draft.materials, ctx.draft.world.tick);
-  if (!definition) return reject('insufficientMaterial');
+  // The first discovery keeps its own properties. A later route landing in the same bucket is the
+  // same substance, and rewriting the entry would silently mutate every inventory holding it.
+  const definition = existing ?? candidate;
 
   ctx.ledger.debit(cost);
   ctx.draft.materials.set(derivedId, definition);
@@ -556,7 +560,9 @@ function applyCombine(
   });
   learnMaterial(ctx, organism.agentId, derivedId);
   // The recipe is labelled by what it produces, so its label always matches the material.
-  learnRecipe(ctx, organism.agentId, deriveRecipeKey(components), definition.label, components);
+  learnRecipe(ctx, organism.agentId, deriveRecipeKey(components), definition.label, components, {
+    produces: derivedId,
+  });
   if (!existing) {
     ctx.events.emit('materialDiscovered', organism.regionId, {
       summary: `${organism.id} produced ${definition.label}`,
@@ -950,7 +956,7 @@ function learnRecipe(
   key: string,
   label: string,
   components: readonly MaterialComponent[],
-  fromLineageId?: LineageId,
+  provenance: { readonly produces?: MaterialId; readonly fromLineageId?: LineageId } = {},
 ): void {
   const agent = ctx.draft.agents.get(agentId);
   if (!agent) return;
@@ -962,7 +968,10 @@ function learnRecipe(
       label,
       components,
       learnedAtTick: ctx.draft.world.tick,
-      ...(fromLineageId === undefined ? {} : { learnedFromLineageId: fromLineageId }),
+      ...(provenance.produces === undefined ? {} : { producesMaterialId: provenance.produces }),
+      ...(provenance.fromLineageId === undefined
+        ? {}
+        : { learnedFromLineageId: provenance.fromLineageId }),
     },
   ].slice(-MAX_KNOWN_RECIPES);
   ctx.draft.agents.set(agentId, { ...agent, knowledge: { ...agent.knowledge, recipes } });
@@ -1011,14 +1020,10 @@ function learnRecipesFromStructure(
     const key = deriveRecipeKey(derivedFrom);
     if (known.has(key)) continue;
     known.add(key);
-    learnRecipe(
-      ctx,
-      organism.agentId,
-      key,
-      definition.label,
-      derivedFrom,
-      structure.createdByLineageId,
-    );
+    learnRecipe(ctx, organism.agentId, key, definition.label, derivedFrom, {
+      produces: definition.id,
+      fromLineageId: structure.createdByLineageId,
+    });
     // Attributed to the builder, exactly as a taught recipe is attributed to its teacher, so
     // the origin of a piece of knowledge reads the same however it travelled.
     ctx.events.emit('knowledgeShared', organism.regionId, {

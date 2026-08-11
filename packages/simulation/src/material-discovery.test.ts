@@ -30,8 +30,31 @@ import type { WorldState } from './state.js';
  * 4242424 sat at exactly 320, the ceiling, with discovery cut mid-flow at tick 1441. Re-measured
  * unclipped it wants 347 and converges at tick 1924. Living population and region occupancy both
  * rose sharply, so more material pairs meet and the natural fixed point moved 253 -> 347.
- * `maxMaterials` went 320 -> 512 and `HORIZON` 1200 -> 2400, both re-grounded on that measurement
+ * `maxMaterials` went 320 -> 576 and `HORIZON` 1200 -> 2400, both re-grounded on that measurement
  * rather than nudged until green.
+ *
+ * The quiet-tail assertion below has since fired for real, and that is worth recording because the
+ * instinct on a red fixture is to reach for a "more robust statistic". With material identity
+ * applied but structure effects absent, two of these three trajectories were still discovering at
+ * tick 2303 and 2355 — and `wd-probe` went silent for 800 ticks (ticks 1200-2000) and then
+ * *resumed, accelerating*. That is precisely the outcome this assertion exists to catch, so
+ * swapping it for a decay-rate statistic would have papered over a genuine non-convergence.
+ * Measured discovery histograms, 200-tick bins, same harness on both trees:
+ *
+ *     trajectory        tree             catalogue   last discovery   quiet tail
+ *     4242424 / w-mat   identity only          244             2303           17
+ *     4242424 / w-mat   both changes           189             1152         1248
+ *     7 / w-mat         identity only          207             1986           14
+ *     7 / w-mat         both changes           403             1819          581
+ *     7 / wd-probe      identity only          236             2355           17
+ *     7 / wd-probe      both changes           276             1908          492
+ *
+ * Note what this does *not* establish. Catalogue size moves in inconsistent directions between the
+ * two trees (244 -> 189 down, 207 -> 403 up), which is the signature of chaotic divergence rather
+ * than of a systematic effect, so "structure effects cause convergence" is suggestive at n=3 and
+ * not proven. What is established is narrower and is the part that matters operationally: this gate
+ * passes at the pair and fails at the identity change alone, so the two are not independently
+ * revertible even though they ship as separate commits.
  */
 
 /**
@@ -149,7 +172,10 @@ describe('material discovery is bounded by chemistry, not by a counter', () => {
     //
     // The tail is why the full horizon is run rather than stopping as soon as a world falls quiet.
     // Early stopping would be much cheaper and would hide the one outcome worth catching: a world
-    // that goes quiet, then resumes.
+    // that goes quiet, then resumes. That is not hypothetical — see the histogram in the header,
+    // where one trajectory sat silent for 800 ticks and then resumed at an accelerating rate. A
+    // 400-tick tail cannot distinguish converged from dormant when dormancy lasts twice that, so
+    // this assertion is a *lower bound* on convergence, not a proof of it.
     for (const world of worlds) {
       expect(world.lastDiscoveryTick).toBeGreaterThan(0);
       expect(world.lastDiscoveryTick).toBeLessThanOrEqual(HORIZON - QUIET_TAIL_TICKS);

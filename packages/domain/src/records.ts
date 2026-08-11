@@ -107,29 +107,35 @@ export type RegionRecord = z.infer<typeof RegionRecordSchema>;
  * so a field added here cannot be silently dropped by one of the two paths — Zod strips unknown
  * keys, which makes a duplicated shape a quiet data-loss bug rather than a validation failure.
  *
- * `key` is absent from records written before recipes became content-addressed. It is a pure
- * function of `components`, so those records are up-converted on read rather than rejected: the
- * derived key is identical to the one a fresh write would produce, which keeps an existing world
- * loadable without a destructive regeneration. Writes always emit `key`.
+ * `key` is **always re-derived**, never read. It is a pure function of `components`, so storing it
+ * is a cache — and that cache went stale the moment material and recipe identity were split into
+ * two namespaces. A record written earlier carries a key with the `mx` prefix that now means
+ * *material*, so trusting it would leave an agent holding the same procedure twice, once under each
+ * scheme, and would defeat the `some(r => r.key === key)` dedupe that keeps a recipe learned once.
+ * Deriving on read up-converts an existing world in place rather than requiring a destructive
+ * regeneration.
+ *
+ * `producesMaterialId` is absent from records written before material identity became physical.
+ * Those recipes genuinely do not know what they make — the product is no longer computable from the
+ * ingredient list — so the read model falls back to the stored label rather than inventing one.
  */
 export const KnownRecipeRecordSchema = z
   .object({
     key: z.string().min(1).max(64).optional(),
     label: z.string().max(64),
     components: z.array(MaterialComponentRecordSchema).max(8),
+    producesMaterialId: idSchema.optional(),
     learnedAtTick: nonNegative,
     learnedFromLineageId: idSchema.optional(),
   })
   .transform((recipe) => ({
     ...recipe,
-    key:
-      recipe.key ??
-      deriveRecipeKey(
-        recipe.components.map((c) => ({
-          materialId: asMaterialId(c.materialId),
-          quantity: c.quantity,
-        })),
-      ),
+    key: deriveRecipeKey(
+      recipe.components.map((c) => ({
+        materialId: asMaterialId(c.materialId),
+        quantity: c.quantity,
+      })),
+    ),
   }));
 
 export const AgentRecordSchema = versioned({
@@ -146,7 +152,20 @@ export const AgentRecordSchema = versioned({
   aspiration: z.string().max(200),
   knowledge: z.object({
     knownMaterialIds: z.array(idSchema).max(64),
-    recipes: z.array(KnownRecipeRecordSchema).max(24),
+    recipes: z
+      .array(KnownRecipeRecordSchema)
+      .max(24)
+      // Deriving `key` on read can make two stored rows collide, because a world may hold the same
+      // procedure recorded under both the old and the new scheme. Keeping the first is the same
+      // rule `learnRecipe` applies, so a loaded agent knows exactly what a freshly taught one would.
+      .transform((recipes) => {
+        const seen = new Set<string>();
+        return recipes.filter((recipe) => {
+          if (seen.has(recipe.key)) return false;
+          seen.add(recipe.key);
+          return true;
+        });
+      }),
     knownStructureIds: z.array(idSchema).max(48),
   }),
   lastDecisionTick: nonNegative,

@@ -225,34 +225,77 @@ export function normaliseComponents(
     .map(([materialId, quantity]) => ({ materialId, quantity }));
 }
 
-/**
- * Content-addressed identity for a derived material.
- *
- * The same ingredients always yield the same id, so a composite rediscovered independently by two
- * lineages converges on a single material rather than two indistinguishable ones. Ordering and
- * duplication in the proposal cannot change the result.
- */
-export function deriveMaterialId(components: readonly MaterialComponent[]): MaterialId {
-  const parts = normaliseComponents(components)
-    .map((c) => `${c.materialId}x${c.quantity}`)
-    .join('_');
+/** FNV-1a over a canonical string. Every content-addressed identity in the domain uses this. */
+function fnv1a(text: string): number {
   let hash = 0x811c9dc5;
-  for (let i = 0; i < parts.length; i += 1) {
-    hash ^= parts.charCodeAt(i);
+  for (let i = 0; i < text.length; i += 1) {
+    hash ^= text.charCodeAt(i);
     hash = Math.imul(hash, 0x01000193);
   }
-  return asMaterialId(`mx${(hash >>> 0).toString(36)}`);
+  return hash >>> 0;
 }
 
 /**
- * Stable identity for a recipe: a recipe is identified by what it produces.
+ * Width, in per-mille, of one bucket of the property lattice that material identity is quantised
+ * onto.
+ *
+ * Identity used to be the *ingredient list including exact quantities*, which made `A x22 + B x33`
+ * and `A x44 + B x66` two materials despite being the same 2:3 blend with, by construction,
+ * byte-identical properties. Measured over 1500 ticks, that left **15–21% of every catalogue as
+ * provable duplicates** — one world held 19 entries with the same property vector *and* the same
+ * nutrition, indistinguishable to every rule in the simulation and to every word the namer can
+ * produce — while **76–81%** were the same ingredient pair at a merely slightly different ratio.
+ *
+ * The consequence was worse than redundancy: because ratio is continuous, the identity space had no
+ * end, so discovery could not converge. It only appeared to converge before because organisms were
+ * too poor to keep trying. A world rich enough to keep combining ran to 1054 materials and was
+ * still finding more at the horizon.
+ *
+ * Quantising closes the space for a physical reason rather than by decree. Blending two points of
+ * the lattice lands near the lattice, so novelty runs out once the reachable region is covered —
+ * and it makes the catalogue legible, which is the whole point of naming materials at all.
+ *
+ * The width is a real claim about how finely a body can tell one substance from another, so it is
+ * deliberately coarse enough to be meaningful: two materials inside one bucket differ by less than
+ * a fortieth of the property range.
+ */
+export const MATERIAL_IDENTITY_BUCKET = 25;
+
+/**
+ * Content-addressed identity for a material: **what it is**, not what made it.
+ *
+ * A composite arrived at by two different routes is the same substance and gets the same id, so a
+ * catalogue can no longer fill with entries no rule and no name can tell apart. How it was reached
+ * is a *recipe*, identified separately by {@link deriveRecipeKey} — many recipes may produce one
+ * material, which is the honest relationship between a procedure and a substance.
+ */
+export function deriveMaterialId(
+  properties: MaterialProperties,
+  nutritionPerUnit: number,
+): MaterialId {
+  const lattice = MATERIAL_PROPERTY_IDS.map(
+    (id) => `${Math.round(properties[id] / MATERIAL_IDENTITY_BUCKET)}`,
+  ).join('_');
+  const nutrition = Math.round(nutritionPerUnit / MATERIAL_IDENTITY_BUCKET);
+  return asMaterialId(`mx${fnv1a(`${lattice}|n${nutrition}`).toString(36)}`);
+}
+
+/**
+ * Stable identity for a recipe: a recipe is identified by **what it consumes**.
  *
  * Recipes are matched, taught and deduplicated by this key and **never** by their label. A label is
  * display text that may be rewritten at any time; matching on it would silently sever knowledge
  * transmission and diverge replay the moment naming changed.
+ *
+ * Distinct from {@link deriveMaterialId} on purpose. Two routes to the same substance are two
+ * pieces of knowledge — a lineage that knows both has learned more than one that knows one — so
+ * collapsing them would destroy culture rather than deduplicate it.
  */
 export function deriveRecipeKey(components: readonly MaterialComponent[]): string {
-  return deriveMaterialId(components);
+  const parts = normaliseComponents(components)
+    .map((c) => `${c.materialId}x${c.quantity}`)
+    .join('_');
+  return `rx${fnv1a(parts).toString(36)}`;
 }
 
 /** Total volume of a component list, in `mu`. */
@@ -458,12 +501,12 @@ export function reactionsForComponents(
 /**
  * The reactions that actually produced a stored material, or none when that cannot be established.
  *
- * Materials persist and are content-addressed by their ingredients, so a world can hold composites
- * created before reactions existed. Recomputing from ingredients alone would happily attribute a
- * reaction to a material it never applied to — an explanation that is confidently wrong, which is
- * worse than no explanation at all. So the attribution is only made when recombining the stored
- * ingredients reproduces the properties the material actually carries. Anything else is legacy, and
- * the honest answer there is silence.
+ * Materials persist, so a world can hold composites created before reactions existed, or under an
+ * earlier identity rule. Recomputing from ingredients alone would happily attribute a reaction to a
+ * material it never applied to — an explanation that is confidently wrong, which is worse than no
+ * explanation at all. So the attribution is only made when recombining the stored ingredients
+ * reproduces the properties the material actually carries. Anything else is legacy, and the honest
+ * answer there is silence.
  */
 export function explainedReactions(
   material: MaterialDefinition,
@@ -471,12 +514,7 @@ export function explainedReactions(
 ): readonly ReactionId[] {
   const components = material.derivedFrom;
   if (!components || components.length < 2) return Object.freeze([]);
-  const recomputed = combineMaterials(
-    material.id,
-    components,
-    catalogue,
-    material.discoveredAtTick ?? 0,
-  );
+  const recomputed = combineMaterials(components, catalogue, material.discoveredAtTick ?? 0);
   if (!recomputed) return Object.freeze([]);
   if (recomputed.nutritionPerUnit !== material.nutritionPerUnit) return Object.freeze([]);
   for (const property of MATERIAL_PROPERTY_IDS) {
@@ -534,7 +572,6 @@ function retainsNutrition(properties: MaterialProperties): boolean {
  * anything it likes, and a name can never drift out of step with the thing it names.
  */
 export function combineMaterials(
-  id: MaterialId,
   components: readonly MaterialComponent[],
   catalogue: ReadonlyMap<MaterialId, MaterialDefinition>,
   discoveredAtTick: number,
@@ -555,6 +592,8 @@ export function combineMaterials(
   const nutritionPerUnit = Math.trunc(
     retainsNutrition(properties) ? meanNutrition : meanNutrition / 2,
   );
+  // Identity is derived last, because a material is identified by what it turned out to be.
+  const id = deriveMaterialId(properties, nutritionPerUnit);
   return Object.freeze({
     id,
     label: deriveMaterialName({ id, origin, properties, nutritionPerUnit }).label,

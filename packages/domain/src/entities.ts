@@ -154,6 +154,14 @@ export interface KnownRecipe {
   /** Display text only. Free to be rewritten without affecting behaviour. */
   readonly label: string;
   readonly components: readonly MaterialComponent[];
+  /**
+   * The material this recipe yields.
+   *
+   * Stored rather than recomputed: material identity is physical, so the product cannot be known
+   * from the ingredient list without performing the blend, and several recipes may converge on one
+   * substance. Optional because recipes learned before identity became physical did not record it.
+   */
+  readonly producesMaterialId?: MaterialId;
   readonly learnedAtTick: TickIndex;
   readonly learnedFromLineageId?: LineageId;
 }

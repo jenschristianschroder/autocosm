@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   asMaterialId,
+  combineMaterials,
   derivePhenotype,
   deriveRecipeKey,
   scaleByPerMille,
@@ -219,15 +220,40 @@ describe('recipe identity', () => {
     expect(matching?.[0]?.label).toBe('a-different-name');
   });
 
-  it('keys every recipe by the material it produces', () => {
+  it('identifies a recipe by its ingredients and records what it makes', () => {
+    // This assertion used to read `state.materials.get(asMaterialId(recipe.key))` — resolving a
+    // recipe key as a material id. That was sound only while one hash served both, and splitting
+    // substance (`mx`, derived from physical properties) from procedure (`rx`, derived from the
+    // ingredient list) makes it structurally impossible. The two namespaces are now disjoint by
+    // construction, which is why a recipe has to carry `producesMaterialId` to say what it makes
+    // rather than having the answer read out of its own identity.
+    //
+    // Note what this cannot assert: that the product's `derivedFrom` equals the recipe's
+    // components. The mapping is deliberately many-to-one — the same two ingredients at a
+    // different ratio land in the same property bucket and are therefore the same substance, so a
+    // material records whichever procedure discovered it first, not the one being examined here.
+    // The invariant that does hold is the one that matters: re-running the combination reproduces
+    // the identity the recipe claims.
+    let checked = 0;
     for (const agent of state.agents.values()) {
       for (const recipe of agent.knowledge.recipes) {
         expect(recipe.key).toBe(deriveRecipeKey(recipe.components));
-        const produced = state.materials.get(asMaterialId(recipe.key));
-        expect(produced).toBeDefined();
-        expect(produced?.derivedFrom).toEqual(recipe.components);
+        expect(recipe.key.startsWith('rx')).toBe(true);
+        // A procedure is not a substance: its key must never name a material.
+        expect(state.materials.get(asMaterialId(recipe.key))).toBeUndefined();
+
+        const producedId = recipe.producesMaterialId;
+        expect(producedId).toBeDefined();
+        if (!producedId) continue;
+        expect(state.materials.get(producedId)).toBeDefined();
+
+        const remade = combineMaterials(recipe.components, state.materials, state.world.tick);
+        expect(remade?.id).toBe(producedId);
+        checked += 1;
       }
     }
+    // Guard against the whole loop being vacuous, which is how an assertion silently stops testing.
+    expect(checked).toBeGreaterThan(0);
   });
 
   it('teaches by key even after every label has been rewritten', () => {

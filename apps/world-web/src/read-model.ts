@@ -10,7 +10,6 @@ import {
   dayPhasePerMille,
   decayPerTick,
   derivePhenotype,
-  deriveMaterialId,
   deriveMaterialName,
   explainedReactions,
   deriveVisual,
@@ -400,13 +399,16 @@ export function composeAgentDetail(
       .slice(0, 64)
       .map((id) => materialChip(state, id)),
     knownRecipes: agent.knowledge.recipes.slice(0, 24).map((recipe) => {
-      const produces = deriveMaterialId(recipe.components);
+      // Read from the recipe rather than recomputed: material identity is physical, so the product
+      // of an ingredient list cannot be known without performing the blend. Recipes learned before
+      // that was true carry no product, and the honest rendering there is the stored label.
+      const produces = recipe.producesMaterialId;
       return {
         key: recipe.key,
         // Joined from the produced material rather than trusting the stored label, which may
         // predate the naming rules or have been copied from another lineage.
-        label: state.materials.get(produces)?.label ?? recipe.label,
-        producesMaterialId: produces,
+        label: (produces ? state.materials.get(produces)?.label : undefined) ?? recipe.label,
+        ...(produces === undefined ? {} : { producesMaterialId: produces }),
         components: recipe.components.slice(0, 8).map((component) => ({
           materialId: component.materialId,
           label: state.materials.get(component.materialId)?.label ?? component.materialId,

@@ -7,7 +7,6 @@ import {
   BASE_MATERIALS,
   blendProperties,
   combineMaterials,
-  deriveMaterialId,
   deriveRecipeKey,
   deriveStructureFunctions,
   describeStructure,
@@ -41,9 +40,9 @@ function worldWithLearnedRecipe(storedLabel: string) {
   const agent = [...state.agents.values()][0];
   if (!agent) throw new Error('seeded world has no agents');
 
-  // The world stores a composite under `deriveMaterialId(components)`, which is what makes the
-  // recipe -> material join possible at all. Mirror that here rather than inventing an id.
-  const composite = combineMaterials(deriveMaterialId(COMPONENTS), COMPONENTS, state.materials, 4);
+  // The world stores a composite under the id derived from the blend it produced, which is what
+  // makes the recipe -> material join possible at all. Mirror that here rather than inventing an id.
+  const composite = combineMaterials(COMPONENTS, state.materials, 4);
   if (!composite) throw new Error('seeded world lacks the base materials this fixture combines');
 
   return {
@@ -66,6 +65,7 @@ function worldWithLearnedRecipe(storedLabel: string) {
                   key: deriveRecipeKey(COMPONENTS),
                   label: storedLabel,
                   components: COMPONENTS,
+                  producesMaterialId: composite.id,
                   learnedAtTick: 4,
                 },
               ],

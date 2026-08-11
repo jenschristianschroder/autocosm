@@ -77,12 +77,14 @@ function recipeToRecord(recipe: {
   readonly key: string;
   readonly label: string;
   readonly components: readonly { readonly materialId: string; readonly quantity: number }[];
+  readonly producesMaterialId?: string;
   readonly learnedAtTick: number;
   readonly learnedFromLineageId?: string;
 }): {
   key: string;
   label: string;
   components: { materialId: string; quantity: number }[];
+  producesMaterialId?: string;
   learnedAtTick: number;
   learnedFromLineageId?: string;
 } {
@@ -90,6 +92,7 @@ function recipeToRecord(recipe: {
     key: recipe.key,
     label: recipe.label,
     components: recipe.components.map((c) => ({ materialId: c.materialId, quantity: c.quantity })),
+    ...opt('producesMaterialId', recipe.producesMaterialId),
     learnedAtTick: recipe.learnedAtTick,
     ...opt('learnedFromLineageId', recipe.learnedFromLineageId),
   };

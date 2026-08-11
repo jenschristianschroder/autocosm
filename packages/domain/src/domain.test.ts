@@ -712,7 +712,7 @@ describe('materials', () => {
       { materialId: asMaterialId('sand'), quantity: 60 },
       { materialId: asMaterialId('resin'), quantity: 40 },
     ];
-    const composite = combineMaterials(asMaterialId('sandResin'), components, catalogue, 12);
+    const composite = combineMaterials(components, catalogue, 12);
     expect(composite).not.toBeNull();
     if (!composite) return;
 
@@ -740,13 +740,10 @@ describe('materials', () => {
     }
 
     // A single ingredient is not a combination, and an unknown ingredient is not usable.
-    expect(
-      combineMaterials(asMaterialId('x'), [components[0] as MaterialComponent], catalogue, 1),
-    ).toBeNull();
-    expect(combineMaterials(asMaterialId('x'), [], catalogue, 1)).toBeNull();
+    expect(combineMaterials([components[0] as MaterialComponent], catalogue, 1)).toBeNull();
+    expect(combineMaterials([], catalogue, 1)).toBeNull();
     expect(
       combineMaterials(
-        asMaterialId('x'),
         [
           { materialId: asMaterialId('sand'), quantity: 10 },
           { materialId: asMaterialId('nothingReal'), quantity: 10 },

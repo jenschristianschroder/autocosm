@@ -5,7 +5,6 @@ import {
   MATERIAL_REACTION_RULES,
   REACTION_IDS,
   combineMaterials,
-  deriveMaterialId,
   explainedReactions,
   indexMaterials,
   reactionsForComponents,
@@ -39,7 +38,7 @@ function base(id: string): MaterialDefinition {
 }
 
 function combine(components: readonly MaterialComponent[]): MaterialDefinition {
-  const result = combineMaterials(deriveMaterialId(components), components, catalogue, 1);
+  const result = combineMaterials(components, catalogue, 1);
   if (!result) throw new Error('combine returned null');
   return result;
 }

@@ -233,7 +233,6 @@ describe('combineMaterials naming', () => {
     expect(first && second).toBeTruthy();
     if (!first || !second) return;
     const composite = combineMaterials(
-      asMaterialId('mxtest01'),
       [
         { materialId: first.id, quantity: 60 },
         { materialId: second.id, quantity: 40 },
@@ -256,9 +255,7 @@ describe('combineMaterials naming', () => {
     const working = new Map(catalogue);
     let previous = first.id;
     for (let generation = 0; generation < 4; generation += 1) {
-      const id = asMaterialId(`mxgen${generation}`);
       const composite = combineMaterials(
-        id,
         [
           { materialId: previous, quantity: 50 },
           { materialId: second.id, quantity: 50 },
@@ -269,8 +266,8 @@ describe('combineMaterials naming', () => {
       expect(composite).not.toBeNull();
       if (!composite) return;
       expect(composite.label).toMatch(/^[A-Z][a-z-]+ [A-Z][a-z]+$/);
-      working.set(id, composite);
-      previous = id;
+      working.set(composite.id, composite);
+      previous = composite.id;
     }
   });
 });
