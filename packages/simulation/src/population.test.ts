@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 
 import { DEFAULT_SIMULATION_CONFIG } from './config.js';
 import { advanceTick } from './tick.js';
@@ -44,13 +44,25 @@ function livingCount(state: WorldState): number {
  * sterile for thousands of ticks before anyone noticed, because nothing reports it.
  */
 describe('population ceiling', () => {
+  /**
+   * Three of the assertions below read different properties of the *same* deterministic world, and
+   * each used to build it from scratch: three identical 300-tick runs at ~13s apiece in isolation,
+   * and ~55s apiece under full-suite contention, where this file has timed out twice. The world is
+   * only read, never mutated, so building it once is not a shortcut — the duplication was the
+   * defect. Measured solo, and the second figure while another core was saturated: 60.2s before,
+   * 42.9s after.
+   */
+  let shared: WorldState;
+
+  beforeAll(() => {
+    shared = run(4242424, TICKS);
+  }, TIMEOUT_MS);
+
   it(
     'keeps reproducing after the cumulative birth count passes the ceiling',
     () => {
-      const state = run(4242424, TICKS);
-
-      expect(state.world.stats.totalBirths).toBeGreaterThan(CONFIG.maxOrganisms);
-      expect(livingCount(state)).toBeGreaterThan(0);
+      expect(shared.world.stats.totalBirths).toBeGreaterThan(CONFIG.maxOrganisms);
+      expect(livingCount(shared)).toBeGreaterThan(0);
     },
     TIMEOUT_MS,
   );
@@ -70,12 +82,11 @@ describe('population ceiling', () => {
   it(
     'bounds retained corpses so the world record cannot grow without limit',
     () => {
-      const state = run(4242424, TICKS);
-      const dead = [...state.organisms.values()].filter((organism) => !organism.alive);
+      const dead = [...shared.organisms.values()].filter((organism) => !organism.alive);
 
       expect(dead.length).toBeLessThanOrEqual(CONFIG.maxDeadOrganismsRetained);
       // Many more have died than are retained, so pruning demonstrably ran.
-      expect(state.world.stats.totalDeaths).toBeGreaterThan(CONFIG.maxDeadOrganismsRetained);
+      expect(shared.world.stats.totalDeaths).toBeGreaterThan(CONFIG.maxDeadOrganismsRetained);
     },
     TIMEOUT_MS,
   );
@@ -83,10 +94,8 @@ describe('population ceiling', () => {
   it(
     'keeps ancestry for organisms whose records were pruned',
     () => {
-      const state = run(4242424, TICKS);
-
-      expect(state.lineageNodes.size).toBeGreaterThan(state.organisms.size);
-      for (const node of state.lineageNodes.values()) {
+      expect(shared.lineageNodes.size).toBeGreaterThan(shared.organisms.size);
+      for (const node of shared.lineageNodes.values()) {
         if (node.diedAtTick === undefined) continue;
         expect(node.causeOfDeath).toBeDefined();
       }
