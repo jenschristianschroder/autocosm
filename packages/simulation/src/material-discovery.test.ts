@@ -21,8 +21,9 @@ import type { WorldState } from './state.js';
  * historical record its legibility: events carry `materialId`, and a pruned material renders as a
  * raw id everywhere it is referenced.
  *
- * The mechanism these tests pin is not a number. It is that **the ceiling is not what stops a
- * world** — discovery must end strictly below the bound, having exhausted what it could reach.
+ * The mechanism these tests pin is not a number. It is that **the ceiling is not what limits a
+ * world** — the catalogue must stay clear of the bound, and combination must not be refused,
+ * whatever the chemistry happens to be doing at the moment the run ends.
  *
  * That framing has now paid for itself. The "stops strictly below the bound" assertion carries a
  * comment saying that reaching `maxMaterials` is *the signal that the headroom has been outgrown,
@@ -33,48 +34,73 @@ import type { WorldState } from './state.js';
  * `maxMaterials` went 320 -> 576 and `HORIZON` 1200 -> 2400, both re-grounded on that measurement
  * rather than nudged until green.
  *
- * The quiet-tail assertion below has since fired for real, and that is worth recording because the
- * instinct on a red fixture is to reach for a "more robust statistic". With material identity
- * applied but structure effects absent, two of these three trajectories were still discovering at
- * tick 2303 and 2355 — and `wd-probe` went silent for 800 ticks (ticks 1200-2000) and then
- * *resumed, accelerating*. That is precisely the outcome this assertion exists to catch, so
- * swapping it for a decay-rate statistic would have papered over a genuine non-convergence.
- * Measured discovery histograms, 200-tick bins, same harness on both trees:
+ * A quiet-tail assertion used to sit below — the last discovery had to leave 400 silent ticks
+ * inside the horizon — and it has been **removed, because a 4000-tick measurement falsified its
+ * premise rather than its constant**. It is kept in the record here because the failure mode is
+ * instructive and because the instinct on a red fixture is to nudge the constant past the
+ * observation.
  *
- *     trajectory        tree             catalogue   last discovery   quiet tail
- *     4242424 / w-mat   identity only          244             2303           17
- *     4242424 / w-mat   both changes           189             1152         1248
- *     7 / w-mat         identity only          207             1986           14
- *     7 / w-mat         both changes           403             1819          581
- *     7 / wd-probe      identity only          236             2355           17
- *     7 / wd-probe      both changes           276             1908          492
+ * Three trajectories, 4000 ticks, discovery counted in 200-tick bins:
  *
- * Note what this does *not* establish. Catalogue size moves in inconsistent directions between the
- * two trees (244 -> 189 down, 207 -> 403 up), which is the signature of chaotic divergence rather
- * than of a systematic effect, so "structure effects cause convergence" is suggestive at n=3 and
- * not proven. What is established is narrower and is the part that matters operationally: this gate
- * passes at the pair and fails at the identity change alone, so the two are not independently
- * revertible even though they ship as separate commits.
+ *     seed 4242424 / w-mat    last discovery 3951   312 discovered   326 materials
+ *       0:28 200:48 400:35 600:50 800:47 1000:4 1200:9 1400:5 1800:7 2000:13 2200:3
+ *       2800:7 3000:5 3200:17 3400:17 3600:12 3800:5
+ *     seed 7 / w-mat          last discovery 1447   312 discovered   326 materials
+ *       0:53 200:81 400:62 600:59 800:28 1000:15 1200:13 1400:1
+ *     seed 7 / wd-probe       last discovery 3848   441 discovered   455 materials
+ *       0:39 200:46 400:25 600:47 800:72 1000:1 1200:6 1400:4 1600:12 1800:26 2000:12
+ *       2200:2 2600:5 2800:2 3000:4 3200:66 3400:30 3600:38 3800:4
+ *
+ * **Discovery here is punctuated, not convergent.** Two of the three are still inventing chemistry
+ * at tick 3848 and 3951 of a 4000-tick run, and `wd-probe` posts its single largest window of the
+ * entire run — 66 discoveries at tick 3200 — after roughly 800 ticks of near-silence, exceeding
+ * every window in its opening thousand ticks. No affordable horizon leaves a silent tail, a longer
+ * tail cannot separate dormant from converged when the dormancy is followed by the peak, and a
+ * decay-rate statistic reads that dormancy as convergence and is then falsified by the burst.
+ *
+ * So the earlier claim in this header — "the reachable combination space closes on its own" — was
+ * an artefact of horizons too short to see the second act. It held over 900-1800 ticks and does not
+ * hold over 4000. The corrected claim is narrower and is what the assertions below now pin: the
+ * catalogue stays well clear of the bound over runs far longer than this gate, and combination is
+ * essentially never refused, so **the bound is not what limits the chemistry** — which was always
+ * the property worth defending. `resolve.ts:651` refuses a novel `combine` with `actionUnavailable`
+ * once the catalogue saturates, so the rejection counter below is the direct alarm for the bound
+ * beginning to bind, and it is cheaper and less equivocal than any tail.
+ *
+ * Note what none of this establishes. Catalogue size moves in inconsistent directions between trees
+ * and between trajectories (189/403/276 at 2400 ticks; 326/326/455 at 4000), which is the signature
+ * of chaotic divergence rather than of a systematic effect. What is established operationally is
+ * that this gate passes at the material-identity and structure-effects pair and fails at the
+ * identity change alone, so the two are not independently revertible even though they shipped as
+ * separate commits.
  */
 
 /**
- * The horizon has to outlast the world's own chemistry, or "goes quiet" is untestable.
+ * The horizon no longer has to outlast the world's chemistry, because the measurement above shows
+ * nothing affordable does. Its job now is narrower: run long enough that a catalogue explosion or a
+ * saturating bound would show up, and no longer.
  *
- * Measured with the ceiling lifted to 100 000, three trajectories over 3000 ticks: the last
- * discovery lands at tick 702 / 832 / **1924**, and nothing is discovered afterwards. 1200 was
- * enough when the last discovery landed at 644/750/737; the deposit-visibility fix raised living
- * population 26 -> 137-259 and region occupancy 9 -> 17-23, so far more material pairs come into
- * contact and exhaustion now takes roughly 2.6x as long. 2400 leaves a silent tail of at least
- * 400 ticks on the slowest measured trajectory.
+ * 2400 ticks buys catalogues of 189/403/276 against a bound of 576 — 33%, 70% and 48% of it — with
+ * whole-world combine rejections in single digits. It is kept at 2400 rather than trimmed because
+ * this is the length at which those figures were measured and because the widest observed spread
+ * between trajectories (189 to 403) is itself the reason for the margin assertion below. It is not
+ * raised, because the 4000-tick probe is now the evidence for long-run headroom and re-running it
+ * every build would cost roughly 77 minutes for a number this file already records.
  *
- * This is the dominant cost in the simulation suite and that is deliberate: convergence is a
- * whole-world property and there is no cheap proxy for it. A shorter horizon does not make the
- * test faster, it makes it wrong — at 1200 ticks seed 4242424 is still discovering at close to
- * peak rate, so a decay assertion there would read noise.
+ * This is the dominant cost in the simulation suite and that is deliberate: whether a bound binds is
+ * a whole-world property with no cheap proxy.
  */
 const HORIZON = 2400;
-/** The silent tail the slowest trajectory must still leave inside `HORIZON`. */
-const QUIET_TAIL_TICKS = 400;
+/**
+ * How close to `maxMaterials` a trajectory may finish.
+ *
+ * "Strictly below the bound" is satisfied at 575 of 576, which would be a world one discovery from
+ * silence. Measured trajectories land at 33-70% of the bound at this horizon, and the spread between
+ * them is wide enough (189 to 403) that ordinary chaotic variance is the thing most likely to carry
+ * a future trajectory over. 90% is therefore the point at which variance alone could cross, which
+ * makes it an alarm rather than a rubber stamp.
+ */
+const MAX_CATALOGUE_FRACTION = 0.9;
 const TIMEOUT_MS = 1_800_000;
 
 /** The two bounds this has already outgrown. Every measured trajectory settles above both. */
@@ -154,31 +180,20 @@ describe('material discovery is bounded by chemistry, not by a counter', () => {
     }
   });
 
-  it('stops strictly below the bound, so the bound is not what stopped it', () => {
-    // The load-bearing assertion. A world truncated by its ceiling sits *exactly* at it; a world
-    // that exhausted its reachable combinations sits below it with room to spare. If a future
-    // trajectory ever reaches `maxMaterials`, this fails — which is the signal that the headroom
-    // has been outgrown, not that the test is wrong.
-    for (const world of worlds) {
-      expect(world.state.materials.size).toBeLessThan(DEFAULT_SIMULATION_CONFIG.maxMaterials);
-    }
-  });
-
-  it('goes quiet on its own, leaving a silent tail inside the run', () => {
-    // Corroborates the assertion above from the other direction: discovery tails off and stays
-    // off while the world keeps running, rather than being cut mid-flow. Asserting a *silent
-    // tail* rather than `lastDiscoveryTick < HORIZON` is the difference between "the run happened
-    // to end after the last discovery" and "the world demonstrably stopped and stayed stopped".
+  it('leaves the bound with room to spare, so the bound is not what limits it', () => {
+    // The load-bearing assertion, and it replaces a quiet-tail assertion that a 4000-tick
+    // measurement falsified — see the header. Where the tail asked "did the world stop?", this asks
+    // the question the tail was only ever a proxy for: "is the world anywhere near the wall?".
     //
-    // The tail is why the full horizon is run rather than stopping as soon as a world falls quiet.
-    // Early stopping would be much cheaper and would hide the one outcome worth catching: a world
-    // that goes quiet, then resumes. That is not hypothetical — see the histogram in the header,
-    // where one trajectory sat silent for 800 ticks and then resumed at an accelerating rate. A
-    // 400-tick tail cannot distinguish converged from dormant when dormancy lasts twice that, so
-    // this assertion is a *lower bound* on convergence, not a proof of it.
+    // A run truncated by its ceiling finishes *at* the bound; one limited by its own chemistry
+    // finishes far below it. The margin matters because "strictly below" is satisfied at 575 of
+    // 576, which would be a world one discovery from silence and would read as green. If a future
+    // trajectory crosses this line, that is the signal that the headroom has been outgrown, not
+    // that the test is wrong.
+    const ceiling = DEFAULT_SIMULATION_CONFIG.maxMaterials * MAX_CATALOGUE_FRACTION;
     for (const world of worlds) {
       expect(world.lastDiscoveryTick).toBeGreaterThan(0);
-      expect(world.lastDiscoveryTick).toBeLessThanOrEqual(HORIZON - QUIET_TAIL_TICKS);
+      expect(world.state.materials.size).toBeLessThanOrEqual(ceiling);
     }
   });
 

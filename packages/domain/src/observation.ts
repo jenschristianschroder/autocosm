@@ -54,6 +54,19 @@ export interface ObservedInventoryEntry {
   readonly quantity: number;
   readonly hardness: PerMille;
   readonly density: PerMille;
+  /**
+   * Energy per unit if this is eaten, mirroring {@link ObservedResource.nutritionPerUnit}.
+   *
+   * An organism could perceive whether a deposit on the ground was food and not whether the same
+   * substance in its own hands was — an observable that did not exist for a thing the organism
+   * is holding. It is reported for that reason alone.
+   *
+   * The hypothesis that closing this asymmetry would arrest the manipulation collapse — median
+   * genotype manipulation sits on exactly 120, the collect gate, for whole runs — was tested and
+   * not supported; see the measurement recorded in `heuristics.ts`. This field is grounding, not
+   * a fix.
+   */
+  readonly nutritionPerUnit: number;
 }
 
 export interface ObservedSelf {
@@ -325,6 +338,7 @@ const observedSelfSchema = z.object({
         quantity: z.number().finite(),
         hardness: perMille,
         density: perMille,
+        nutritionPerUnit: z.number().finite(),
       }),
     )
     .max(32),

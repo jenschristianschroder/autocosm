@@ -40,7 +40,23 @@ export const MoveActionSchema = z.object({
 
 export const ConsumeActionSchema = z.object({
   type: z.literal('consume'),
-  targetKind: z.enum(['resourceNode', 'organism', 'biomass']),
+  /**
+   * `carried` eats from the organism's own inventory.
+   *
+   * The motivation was `collect`'s missing private return: below the combine gate at 220 a
+   * gathered material had no use, so a whole turn and some energy bought nothing for the next 100
+   * points of manipulation. Selection settles median genotype manipulation on exactly 120 — the
+   * collect gate — so the modal organism pays the upkeep and mass of a capability whose output it
+   * cannot yet spend.
+   *
+   * That reasoning did not survive measurement, and the honest record is in `heuristics.ts`: the
+   * deterministic policy deliberately never proposes this, because eating one's own stock either
+   * collapses the population (as an early branch) or starves the combine branch of the chemistry
+   * it needs (as a late one). The capability is kept because it is a real thing an organism can
+   * do and a model-driven agent may find a situation the fixed ladder cannot recognise — not
+   * because it was shown to help.
+   */
+  targetKind: z.enum(['resourceNode', 'organism', 'biomass', 'carried']),
   targetId: idSchema.optional(),
 });
 

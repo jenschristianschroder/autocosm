@@ -111,6 +111,24 @@ export function decideHeuristically(observation: Observation, seed: number): Age
         return { type: 'attack', targetOrganismId: prey.organismId };
       }
     }
+    // Provisions are deliberately *not* eaten here, and the omission is measured rather than an
+    // oversight. Letting a starving organism eat its own cargo looks free — it costs no step and
+    // cannot be beaten to by a competitor — and it collapses the world. Against an otherwise
+    // identical control at 1200 ticks: living organisms 152 -> 20, catalogue 189 -> 91,
+    // discoveries 175 -> 77. A carried scrap is a one-off worth a fraction of a feeding site, and
+    // crafted material is nutrition-poor by design, so an organism that eats one is still starving
+    // next tick, eats another, and never travels to the renewable food at all. The first-match
+    // ladder turns a cheap option into an absorbing state: taking it denies every branch below.
+    //
+    // Demoting it to a genuine last resort recovered the population (177 alive) but still spent
+    // stock the combine branch needs: combinations 539 -> 335 and discoveries 212 -> 143 against
+    // the same trajectory without it. Consuming a material destroys chemistry that has already
+    // been gathered, so the trade is population against creation, and creation is the point.
+    //
+    // The *capability* still exists — `consume` accepts `targetKind: 'carried'`, the resolver
+    // implements it, and an organism can see `nutritionPerUnit` on its own cargo — so a model-
+    // driven agent may reach for it in a situation this fixed ladder cannot recognise. The
+    // deterministic policy simply declines to.
     return { type: 'rest' };
   }
 
@@ -214,18 +232,36 @@ export function decideHeuristically(observation: Observation, seed: number): Age
         return { type: 'build', pattern, components };
       }
     }
-    // Combining two distinct materials is how new composites enter the world.
-    if (can.has('combine') && self.inventory.length >= 2 && carried >= 90) {
-      const [a, b] = self.inventory;
-      if (a && b && rng.chance(clampPerMille(drives.build))) {
-        return {
-          type: 'combine',
-          components: [
-            { materialId: a.materialId, quantity: Math.max(1, Math.trunc(a.quantity / 2)) },
-            { materialId: b.materialId, quantity: Math.max(1, Math.trunc(b.quantity / 2)) },
-          ],
-        };
-      }
+  }
+
+  // 7b. Combine. Two distinct materials become a composite, which is how anything new ever enters
+  //     the world's chemistry.
+  //
+  //     Deliberately its own branch. `CAPABILITY_REQUIREMENTS` declares three rungs — collect 120,
+  //     combine 220, build 250 — and this test used to sit *inside* the build branch above, so an
+  //     organism in the 220-249 band could combine and would never propose it. The middle rung of
+  //     the creative ladder, the one the manipulation trait has to stand on while climbing, did not
+  //     exist in the only policy that runs every tick. Measured over 2000 ticks on two seeds:
+  //     `materialCombined` fell to zero and stayed there from tick 750 and 1250 respectively, while
+  //     14-23 living organisms sat above the combine gate throughout, and `materialDiscovered`
+  //     followed it to zero. Production shows the same end state, with *zero* rejections — these
+  //     actions were never proposed rather than being refused.
+  if (
+    can.has('combine') &&
+    self.inventory.length >= 2 &&
+    carried >= 90 &&
+    // Its own energy floor, below the build branch's: combining is the cheaper act.
+    energyRatio > 350
+  ) {
+    const [a, b] = self.inventory;
+    if (a && b && rng.chance(clampPerMille(drives.build))) {
+      return {
+        type: 'combine',
+        components: [
+          { materialId: a.materialId, quantity: Math.max(1, Math.trunc(a.quantity / 2)) },
+          { materialId: b.materialId, quantity: Math.max(1, Math.trunc(b.quantity / 2)) },
+        ],
+      };
     }
   }
 

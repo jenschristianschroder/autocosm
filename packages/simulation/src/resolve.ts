@@ -36,6 +36,7 @@ import {
   type InventoryEntry,
   type LineageId,
   type MaterialComponent,
+  type MaterialDefinition,
   type MaterialId,
   type Organism,
   type Phenotype,
@@ -308,6 +309,80 @@ function applyConsume(
       agentId: organism.agentId,
       lineageId: organism.lineageId,
       payload: { materialId: node.materialId, energyGained: absorbed },
+    });
+    return ACCEPTED;
+  }
+
+  if (action.targetKind === 'carried') {
+    // Eat from one's own hands.
+    //
+    // The nutrition is identical to eating the same substance off the ground, so this adds no
+    // new energy source to the world — it makes an existing one storable. What it changes is the
+    // *gradient*: `collect` now returns something the organism can use immediately, at every
+    // point of the manipulation range, instead of only above the combine gate 100 points higher.
+    // The toxicity model is the resource-node branch's, unchanged: carrying a poison does not
+    // detoxify it.
+    if (organism.inventory.length === 0) return reject('unknownTarget');
+    const edible = organism.inventory
+      .map((entry) => ({ entry, definition: ctx.draft.materials.get(entry.materialId) }))
+      .filter(
+        (candidate): candidate is { entry: InventoryEntry; definition: MaterialDefinition } =>
+          candidate.definition !== undefined &&
+          candidate.definition.nutritionPerUnit > 0 &&
+          candidate.entry.quantity > 0,
+      );
+    if (edible.length === 0) return reject('actionUnavailable');
+
+    // Prefer whichever named material was requested; otherwise the most nourishing mouthful,
+    // ties broken by id so the choice is stable across processes.
+    const requested =
+      action.targetId === undefined
+        ? undefined
+        : edible.find((c) => c.entry.materialId === action.targetId);
+    const chosen =
+      requested ??
+      edible.reduce((best, candidate) =>
+        candidate.definition.nutritionPerUnit > best.definition.nutritionPerUnit ||
+        (candidate.definition.nutritionPerUnit === best.definition.nutritionPerUnit &&
+          candidate.entry.materialId < best.entry.materialId)
+          ? candidate
+          : best,
+      );
+
+    const appetite = Math.max(
+      1,
+      Math.trunc(phenotype.mass / 25) + scaleByPerMille(24, organism.genotype.metabolicRate),
+    );
+    const taken = Math.min(chosen.entry.quantity, appetite);
+    const toxicity = chosen.definition.properties.toxicity;
+    const resistance = organism.genotype.toxinResistance;
+    const base = taken * chosen.definition.nutritionPerUnit;
+    const gained = base + scaleByPerMille(base, yieldBonus);
+    const harm =
+      toxicity > resistance ? Math.max(1, Math.trunc(((toxicity - resistance) * taken) / 200)) : 0;
+
+    const absorbed = absorbEnergy(organism.energy, gained, phenotype.maxEnergy);
+    // Material carried was already debited from the world when it was collected; eating it is a
+    // transfer from stock to the organism, so the ledger sees the same inflow grazing does.
+    ctx.ledger.credit(absorbed);
+    const nextHealth = Math.max(0, organism.health - harm);
+    const survives = nextHealth > 0;
+    ctx.draft.organisms.set(organism.id, {
+      ...organism,
+      energy: organism.energy + absorbed,
+      health: nextHealth,
+      alive: survives,
+      inventory: consumeInventory(organism.inventory, [
+        { materialId: chosen.entry.materialId, quantity: taken },
+      ]),
+      ...(survives ? {} : { diedAtTick: ctx.draft.world.tick, causeOfDeath: 'toxicity' as const }),
+    });
+    ctx.events.emit('organismFed', organism.regionId, {
+      summary: `${organism.id} ate ${taken}mu of carried ${chosen.definition.label}`,
+      organismId: organism.id,
+      agentId: organism.agentId,
+      lineageId: organism.lineageId,
+      payload: { materialId: chosen.entry.materialId, energyGained: absorbed },
     });
     return ACCEPTED;
   }

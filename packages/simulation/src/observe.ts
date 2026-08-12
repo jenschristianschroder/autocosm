@@ -128,12 +128,15 @@ export function observe(
     inventory: organism.inventory.map((e) => {
       // An organism handles what it carries, so it knows how hard and how heavy each is. Without
       // this it can only rank material by quantity, and cannot build deliberately for a function.
+      // It also knows whether what it holds is edible — the same fact `ObservedResource` already
+      // reported for a deposit lying on the ground.
       const material = draft.materials.get(e.materialId);
       return {
         materialId: e.materialId,
         quantity: e.quantity,
         hardness: material?.properties.hardness ?? 0,
         density: material?.properties.density ?? 0,
+        nutritionPerUnit: material?.nutritionPerUnit ?? 0,
       };
     }),
     ...(organism.attachedStructureId === undefined
