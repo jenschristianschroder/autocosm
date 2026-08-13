@@ -159,13 +159,42 @@ describe('seeded biosphere', () => {
     expect(drifted).toBe(true);
   });
 
+  /**
+   * Scans and reports, rather than calling `expect` once per event per property.
+   *
+   * The property is unchanged: every event carries the right world, a sane tick, a payload under
+   * 2KB and a summary under 160 chars. What changed is the cost of checking it. This fixture
+   * collects every event from a 500-tick world, and after `biomassRegenAtFullLight` went 60 -> 180
+   * that world holds 420 living organisms instead of ~148, so the event count rose with it — four
+   * `expect` calls per event became hundreds of thousands of them and the test crossed vitest's
+   * 5000ms default.
+   *
+   * `expect` is not free: each call builds an assertion context and a diff-capable error path. The
+   * comparison itself is a handful of instructions. So the overhead here was never the assertion —
+   * it was the machinery around it, which is exactly the "useless work in the fixture" this package
+   * fixes rather than budgets around.
+   *
+   * The failure message gets better too. Four bare `expect`s reported `expected 2049 to be less
+   * than 2048` with no indication of which event; this names the offender and its kind, and caps
+   * the report so one systemic violation cannot produce a megabyte of output.
+   */
   it('emits only bounded, attributable events', () => {
+    const violations: string[] = [];
     for (const event of events) {
-      expect(event.worldId).toBe('w-eco');
-      expect(event.tick).toBeGreaterThanOrEqual(0);
-      expect(JSON.stringify(event.payload).length).toBeLessThan(2048);
-      expect(event.summary.length).toBeLessThanOrEqual(160);
+      if (event.worldId !== 'w-eco') violations.push(`${event.id} ${event.kind}: worldId`);
+      if (!(event.tick >= 0)) violations.push(`${event.id} ${event.kind}: tick ${event.tick}`);
+      const payloadChars = JSON.stringify(event.payload).length;
+      if (payloadChars >= 2048)
+        violations.push(`${event.id} ${event.kind}: payload ${payloadChars} chars`);
+      if (event.summary.length > 160)
+        violations.push(`${event.id} ${event.kind}: summary ${event.summary.length} chars`);
+      if (violations.length >= 10) break;
     }
+    expect(violations).toEqual([]);
+    // The loop above passes vacuously on an empty world, and this fixture's whole value is that it
+    // ran one. Every other assertion in this describe would also have to fail for that to happen,
+    // but a bounds check that cannot fire is the defect class this package keeps finding.
+    expect(events.length).toBeGreaterThan(0);
   });
 });
 

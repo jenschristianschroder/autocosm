@@ -7,15 +7,31 @@ import type { SimulationConfig } from './config.js';
 import type { WorldState } from './state.js';
 
 /**
- * A deliberately small world. The defect is proportional to the ceiling, not absolute: a world
- * sterilises itself once `maxOrganisms` organisms have ever been born. Shrinking the ceiling
- * brings that moment forward from tick ~457 to within a short run, so the regression is provable
- * in seconds rather than minutes.
+ * A deliberately small, deliberately hungry world. Both overrides construct the subject rather
+ * than hoping a default trajectory supplies one.
+ *
+ * `maxOrganisms` — the defect is proportional to the ceiling, not absolute: a world sterilises
+ * itself once `maxOrganisms` organisms have ever been born. Shrinking the ceiling brings that
+ * moment forward from tick ~457 to within a short run, so the regression is provable in seconds
+ * rather than minutes.
+ *
+ * `biomassRegenAtFullLight` — pinned to the value this fixture was calibrated against, because
+ * two of the assertions below need *corpses* and the world default no longer produces them.
+ * Raising the default 60 -> 180 (the supply fix that let production build anything at all) feeds
+ * a 100-organism world so well that nothing starves: measured on this exact fixture, `totalDeaths`
+ * over 300 ticks fell to **1**, against the 24 retained corpses pruning is supposed to bound. The
+ * pruner was never at fault — the premise was. Pruning is a function of how many corpses exist,
+ * not of what killed them, so restoring the scarcity keeps the mechanism under test and keeps the
+ * run at 300 ticks instead of the thousands that reaching 24 deaths would now cost.
+ *
+ * Deliberately pinned here rather than inherited: a fixture that needs a specific pressure should
+ * say so, not silently re-tune whenever a world-balance constant moves.
  */
 const CONFIG: SimulationConfig = {
   ...DEFAULT_SIMULATION_CONFIG,
   maxOrganisms: 100,
   maxDeadOrganismsRetained: 24,
+  biomassRegenAtFullLight: 60,
 };
 
 const TICKS = 300;

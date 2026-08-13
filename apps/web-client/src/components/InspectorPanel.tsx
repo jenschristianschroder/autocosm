@@ -158,8 +158,7 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
                   className="chip chip--button"
                   onClick={() => props.onSelect({ kind: 'resource', id: node.id })}
                 >
-                  {props.materials?.find((m) => m.id === node.materialId)?.label ?? node.materialId}{' '}
-                  · {node.quantity}
+                  {node.materialLabel} · {node.quantity}
                 </button>
               </li>
             ))}
@@ -189,10 +188,10 @@ export function InspectorPanel(props: InspectorPanelProps): JSX.Element {
     return (
       <aside className="panel panel--inspector" aria-label="Inspector">
         <header className="panel__header">
-          <h2>{material?.label ?? node.materialId}</h2>
+          <h2>{node.materialLabel}</h2>
           <FollowButton following={props.following} onToggle={props.onToggleFollow} />
         </header>
-        {material?.subtitle !== undefined && <p className="muted small">{material.subtitle}</p>}
+        {node.materialSubtitle !== '' && <p className="muted small">{node.materialSubtitle}</p>}
         <dl className="facts">
           <Fact label="Remaining" value={`${node.quantity} of ${node.capacity}`} />
           <Fact label="Stocked" value={perMille(share)} />

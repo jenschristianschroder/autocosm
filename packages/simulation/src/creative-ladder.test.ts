@@ -15,7 +15,7 @@ import {
   type OrganismId,
 } from '@autocosm/domain';
 
-import { DEFAULT_SIMULATION_CONFIG } from './config.js';
+import { DEFAULT_SIMULATION_CONFIG, type SimulationConfig } from './config.js';
 import { EventSink } from './events.js';
 import { decideHeuristically } from './heuristics.js';
 import { EnergyLedger, resolveAction, type ResolutionContext } from './resolve.js';
@@ -331,11 +331,12 @@ describe('a world does not lose the ability to combine', () => {
    * which fails loudly on the pre-fix code and cannot be satisfied by luck.
    *
    * Deliberately *not* an assertion that combining continues to the end of the run. Measured on
-   * this exact trajectory, `combine` leaves `availableActions` entirely at tick ~1250: manipulation
-   * decays below its own 220 gate because nothing above the collect gate has a private return.
-   * That is the fitness valley this plan already records as needing a measured balance change of
-   * its own, and it is out of scope here. Asserting against it would be asserting that a fix in
-   * the policy layer repairs a gradient in the selection layer, which it does not.
+   * this exact trajectory at the default `maxOrganisms`, `combine` leaves `availableActions`
+   * entirely at tick ~1250: manipulation decays below its own 220 gate because nothing above the
+   * collect gate has a private return. That is the fitness valley this plan already records as
+   * needing a measured balance change of its own, and it is out of scope here. Asserting against it
+   * would be asserting that a fix in the policy layer repairs a gradient in the selection layer,
+   * which it does not.
    *
    * Deliberately *not* an assertion that discovery continues either: `material-discovery.test.ts`
    * requires the opposite, because the reachable combination space genuinely closes.
@@ -352,14 +353,37 @@ describe('a world does not lose the ability to combine', () => {
    * was verified failing against the pre-fix ordering. Recorded because a world-level test that
    * cannot see the defect it was written for is worse than none if its scope is left implied.
    *
-   * Coverage is ticks 200-1000: the last two windows carry zero capable organisms, for the decay
-   * reason above, so they are premise-free rather than passing.
+   * **Coverage is now the full ticks 200-1400, and it widened because the world got smaller.** This
+   * run takes `maxOrganisms: 140` rather than the default 420 — a cost change, since tick cost is
+   * superlinear in headcount (measured 125s against ~590s for this same 1400-tick trajectory,
+   * ~4.7x) and this test blew its 900s budget after `biomassRegenAtFullLight` went 60 -> 180.
+   *
+   * The coverage note here used to read "ticks 200-1000: the last two windows carry zero capable
+   * organisms, so they are premise-free rather than passing." At cap 140 that is no longer true.
+   * Organisms above the 220 gate, per 200-tick window:
+   *
+   *     tick      200  400  600  800  1000  1200  1400
+   *     cap 140    65   63   57   40    42    38    31
+   *     cap 420   138  100   99  151   115     -     -
+   *
+   * Every window carries a premise, so the implication is actually tested across the whole horizon
+   * instead of two-sevenths of it being decorative. Offered as an observation and not a claim: a
+   * world below carrying capacity has surplus energy, and manipulation's decay is a selection
+   * response to a trait that costs upkeep and mass without a private return, so less competition
+   * plausibly slows the decay. This file does not measure that mechanism and does not assert it.
+   *
+   * What is given up, and it is real: at cap 140 this test can no longer observe the *priced-out*
+   * condition production actually exhibits, where a world pinned at its ceiling has no surplus and
+   * the ladder is unreachable from below. That was already out of scope here per the note above,
+   * and it is guarded at capacity by `population-saturation.test.ts`, which asserts the world
+   * genuinely reaches its ceiling and still gathers and builds there.
    */
   it('combines material in every window where an organism can combine', () => {
     const HORIZON = 1400;
     const WINDOW = 200;
     // Phenotype gate for `combine` from `CAPABILITY_REQUIREMENTS`.
     const COMBINE_GATE = 220;
+    const CONFIG: SimulationConfig = { ...DEFAULT_SIMULATION_CONFIG, maxOrganisms: 140 };
 
     let state = generateWorld({ seed: 4_242_424, worldId: 'w-ladder-run' });
     let windowCombines = 0;
@@ -367,7 +391,7 @@ describe('a world does not lose the ability to combine', () => {
     const barrenWindows: { readonly tick: number; readonly capable: number }[] = [];
 
     for (let index = 0; index < HORIZON; index += 1) {
-      const result = advanceTick(state);
+      const result = advanceTick(state, { config: CONFIG });
       state = result.state;
       for (const event of result.events) {
         if (event.kind === 'materialCombined') windowCombines += 1;

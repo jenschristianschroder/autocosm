@@ -99,11 +99,27 @@ describe('determinism', () => {
     expect(fingerprint(a)).not.toEqual(fingerprint(b));
   });
 
+  /**
+   * Budgeted explicitly, because here the expensive work *is* the assertion.
+   *
+   * Determinism cannot be checked without running the world twice, so there is no wasteful fixture
+   * setup to remove — 80 whole-world ticks is the minimum this claim costs. It ran inside vitest's
+   * 5000ms default until `biomassRegenAtFullLight` went 60 -> 180, which pins a world at 420 living
+   * organisms instead of ~148 and makes every tick ~4.7x more expensive (measured: 125s against
+   * ~590s for the same 1400-tick trajectory at caps 140 and 420). Under full-suite contention that
+   * crossed 5000ms.
+   *
+   * Deliberately *not* moved to a smaller world like the mechanism tests elsewhere in this package.
+   * Replay determinism is the property production depends on most directly, and production runs the
+   * default configuration; a determinism proof taken on a config nothing ships is worth less than
+   * the seconds it saves. The 5000ms it used to run under was vitest's default rather than a
+   * considered budget, so this is stating a bound that was previously implicit.
+   */
   it('replays 40 ticks identically', () => {
     const first = run(SEED, 40);
     const second = run(SEED, 40);
     expect(fingerprint(first.state)).toEqual(fingerprint(second.state));
-  });
+  }, 60_000);
 
   it('emits identical event identifiers on replay', () => {
     const first = run(SEED, 12);

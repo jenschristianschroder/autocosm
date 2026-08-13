@@ -28,7 +28,11 @@ export interface SimulationConfig {
    *
    * A backstop, not a balance knob. Discovery is one-way — nothing removes a material — so this
    * is cumulative, and a world that touches it has crafting disabled for the rest of its life.
-   * It must therefore sit above the point where discovery closes on its own; see the default.
+   *
+   * It cannot be set above a convergence point, because measurement showed there is none: growth
+   * decelerates but stays strongly positive out to at least tick 2400, and is punctuated rather
+   * than convergent. See the default for the trajectories. This is a bound that will eventually
+   * bind, not a ceiling above an asymptote.
    */
   readonly maxMaterials: number;
   /** Maximum new AI decisions requested in a single tick. */
@@ -139,12 +143,106 @@ export const DEFAULT_SIMULATION_CONFIG: SimulationConfig = Object.freeze({
   // Going above 576 therefore trades payload and legibility against open-endedness, and wants a
   // converged measurement plus a *selective* catalogue — one that keeps every material the world
   // currently references rather than an alphabetical prefix — not a larger constant.
-  maxMaterials: 576,
+  //
+  // ---- Both preconditions were then tested. One does not exist; the other was superseded. ----
+  //
+  // **There is no converged measurement to take.** With the cap lifted to 100 000 and the supply
+  // fix below applied, three trajectories were run to 2400 ticks at a pinned population of 420,
+  // logging the catalogue every 200 ticks. Growth decelerates and never stops:
+  //
+  //   tick    4242424/w-mat      7/w-mat        7/wd-probe
+  //   800     303 (+105)         280 (+70)      425 (+171)
+  //   1200    664 (+175)         523 (+111)     849 (+204)
+  //   1600    986 (+151)         766 (+118)     1153 (+117)
+  //   2000    1251 (+152)        -              -
+  //
+  // Still +152 per window at tick 2000, on a world production runs ~7x longer than. This
+  // corroborates the 4000-tick probe recorded in `material-discovery.test.ts`: discovery is
+  // *punctuated, not convergent* — `wd-probe` posted its single largest window of that entire run
+  // (66 discoveries) at tick 3200, after ~800 ticks of near-silence. So the earlier instruction to
+  // wait for convergence cannot be satisfied at any horizon, and this constant can only ever be a
+  // **bound**, never a ceiling sitting above a known asymptote. Saying so is the point: three
+  // separate revisions of this comment treated an unconverged count as an asymptote.
+  //
+  // **The selective catalogue was built as a decoupling instead, which is strictly better.** The
+  // stated requirement — "keep every material the world currently references" — assumed the
+  // catalogue is what makes a material legible. Grepping the read model proved that is true for
+  // exactly one field, `SnapshotResponse.resources[].materialId`; every detail route already joins
+  // labels server-side. That one field now carries `materialLabel`/`materialSubtitle` inline, so
+  // truncating the catalogue can no longer render anything as a raw id. The failure mode it was
+  // protecting against was also worse than documented: base ids are words and crafted ids are
+  // `mx...`, so an alphabetical slice at 576 drops `water`, `silt`, `sand`, `stone`, `resin` and
+  // `toxinSac` *first* — precisely what every resource node is made of. The catalogue now sorts
+  // base-before-composite and stays at 576 as a browse convenience.
+  //
+  // So `maxMaterials` is now a **pure simulation and storage bound**, decoupled from `/world`
+  // payload entirely. 8192 is chosen against the two limits that remain real:
+  //   - `MAX_PER_STORE = 20_000` (`storage/bundle.ts`) caps what a bundle load will drain, and a
+  //     truncated materials store is silent corruption. 8192 sits 2.4x below it.
+  //   - 5.3x above the highest measured 2400-tick trajectory, so `material-discovery.test.ts`'s
+  //     "catalogue <= 90% of the bound" gate has real margin (~1500/7373 = 20%) rather than
+  //     passing by a hair.
+  // It is not a solved problem. An unbounded process against a fixed bound binds *eventually*, and
+  // the only real fix is eviction — rejected earlier because events carry `materialId` and a
+  // pruned material takes its label with it, an objection the decoupling above does **not**
+  // remove (the label is derived from the record, so evicting the record still loses it). The
+  // combine rejection counter in `material-discovery.test.ts` is the alarm for when this binds.
+  maxMaterials: 8192,
   maxDecisionsPerTick: 12,
   decisionExpiryTicks: 40,
   minTicksBetweenDecisionsPerLineage: 6,
   minPlanningForDiscretionaryDecision: 40,
-  biomassRegenAtFullLight: 60,
+  // Raised 60 -> 180 to unprice the creative ladder. Production at tick 13 966 had 0 structures
+  // standing and 76 materials after ~14k ticks, while a fresh local world reached 326-455 by tick
+  // 4000. The cause is not resource exhaustion and not a mis-ordered branch: every creative rung
+  // is gated on surplus energy, branch 6 (feed, `energyRatio < 620`) precedes all of them in a
+  // first-match ladder, and a world pinned at `maxOrganisms` has no surplus. Only 5.8% of the
+  // production population cleared 620, so `collect` was almost never proposed, carried stock never
+  // reached the combine branch's `carried >= 90`, and build — needing surplus *and* a full load —
+  // was unreachable twice over.
+  //
+  // Six paired seeds, 900 ticks, control and treatment run simultaneously from separate worktrees
+  // of the same commit (n=1 in this system is noise: an earlier single-seed comparison of an
+  // unrelated change read as a catastrophic regression and was contradicted by two other seeds):
+  //
+  //   metric                control(60)  treatment(180)  ratio  t(5)   seeds favouring
+  //   living organisms      148.0        419.5           2.83   20.07  6/6
+  //   materials known       159.3        415.7           2.61    5.41  6/6
+  //   standing structures    25.2         54.5           2.17    8.48  6/6
+  //   structures built       37.2         69.3           1.87    7.37  6/6
+  //   combinations          307.0        953.7           3.11    4.59  6/6
+  //   share >= 620 energy    52.7%        67.0%          1.27    2.54  6/6
+  //   median energy         625          742             1.19    2.48  6/6
+  //   lineages                8.5          9.0           1.06    0.89  2/6
+  //
+  // Significance needs |t| >= 2.571 at df=5; the sign test is 6/6 on every row above (p = 0.031).
+  //
+  // Two honest caveats, recorded because they argue against the change:
+  //   - **The proposed mechanism is the weakest row in the table.** `share >= 620` is the variable
+  //     the causal story runs through, and at t=2.54 it is the one result that does *not* clear
+  //     the significance threshold. Outcomes are established; the explanation is supported, not
+  //     proven, at n=6.
+  //   - **Lineage count does not move** (2/6, t=0.89), contradicting the "consolidation ratchet"
+  //     an earlier single-arm sweep appeared to show. That reading is withdrawn.
+  //
+  // Dose-response across four points, including the live world, is monotonic in the share clearing
+  // the feed gate — which is why the mechanism is believed despite the caveat above:
+  //
+  //   world                          share >= 620   materials   standing
+  //   production, tick 13 966          5.8%           76           0
+  //   local, ceiling 420, regen 60    54.5%          184          14
+  //   local, regen 180                87.4%          540          75
+  //   local, regen 360                94.0%          576 (capped) 102
+  //
+  // Production is expected to respond *more* strongly than the local dose-response suggests,
+  // because it is pinned at 421/420: extra supply cannot become extra organisms, so it must become
+  // per-head wealth, and pinning also blocks branch 5 (reproduce, `> 700`) — the competing sink
+  // that would otherwise absorb exactly the organisms rich enough to create.
+  //
+  // 360 was measured and not taken. It buys a further 6.6 points of share for 2x the supply, and
+  // caps the material catalogue outright, so it trades a shrinking return against a world that no
+  // longer has scarcity as a selection pressure at all.
+  biomassRegenAtFullLight: 180,
   biomassCap: 6000,
   energyPerBiomassUnit: 5,
   carcassRecoveryPerMille: 500,

@@ -14,7 +14,7 @@ import {
   genotypeDivergence,
   splinterName,
 } from './speciation.js';
-import { DEFAULT_SIMULATION_CONFIG } from './config.js';
+import { DEFAULT_SIMULATION_CONFIG, type SimulationConfig } from './config.js';
 import { advanceTick } from './tick.js';
 import { generateWorld } from './worldgen.js';
 import type { WorldState } from './state.js';
@@ -227,6 +227,23 @@ function displaceFoundingGenomes(state: WorldState): WorldState {
   return { ...state, lineages };
 }
 
+/**
+ * A world of 140 for the three whole-world runs below, not the default 420.
+ *
+ * Tick cost is superlinear in living organisms — measured at 125s against ~590s for the same
+ * 1400-tick trajectory at caps 140 and 420, ~4.7x — and after `biomassRegenAtFullLight` went
+ * 60 -> 180 two of the three tests here blew the 600s budget while the third took 478s of it.
+ *
+ * Speciation is a property of genotype distance against a threshold, evaluated per birth. Whether a
+ * splinter is far enough from its parent to found a lineage does not depend on how many organisms
+ * the world holds; the headcount only changes how many births are sampled per tick. The third test
+ * is the one that genuinely consumes births — it must drive the active-lineage count all the way to
+ * its ceiling — and it is the reason this constant is stated once here rather than per test: if a
+ * smaller world ever fails to saturate that ceiling, the fix is that test's window, not a silent
+ * relaxation of `toBe` to `toBeLessThanOrEqual`.
+ */
+const MECHANISM_CONFIG: SimulationConfig = { ...DEFAULT_SIMULATION_CONFIG, maxOrganisms: 140 };
+
 function runUntilSplit(
   state: WorldState,
   maxTicks: number,
@@ -234,7 +251,7 @@ function runUntilSplit(
   let current = state;
   let founded = 0;
   for (let i = 0; i < maxTicks && founded === 0; i += 1) {
-    const result = advanceTick(current);
+    const result = advanceTick(current, { config: MECHANISM_CONFIG });
     current = result.state;
     founded += result.events.filter((e) => e.kind === 'lineageFounded').length;
   }
@@ -252,7 +269,8 @@ describe('a running world', () => {
     () => {
       let state = generateWorld({ seed: 7, worldId: 'w-speciation' });
       const founding = new Set(state.lineages.keys());
-      for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
+      for (let i = 0; i < 600; i += 1)
+        state = advanceTick(state, { config: MECHANISM_CONFIG }).state;
 
       const outcome = runUntilSplit(displaceFoundingGenomes(state), 200);
       expect(outcome.founded).toBeGreaterThan(0);
@@ -268,7 +286,8 @@ describe('a running world', () => {
     () => {
       let state = generateWorld({ seed: 7, worldId: 'w-speciation' });
       const founding = new Set(state.lineages.keys());
-      for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
+      for (let i = 0; i < 600; i += 1)
+        state = advanceTick(state, { config: MECHANISM_CONFIG }).state;
 
       const outcome = runUntilSplit(displaceFoundingGenomes(state), 200);
       const created = [...outcome.state.lineages.values()].filter((l) => !founding.has(l.id));
@@ -299,7 +318,8 @@ describe('a running world', () => {
     'never exceeds the active-lineage ceiling under sustained splitting pressure',
     () => {
       let state = generateWorld({ seed: 91017, worldId: 'w-speciation' });
-      for (let i = 0; i < 600; i += 1) state = advanceTick(state).state;
+      for (let i = 0; i < 600; i += 1)
+        state = advanceTick(state, { config: MECHANISM_CONFIG }).state;
 
       // Every birth from here is over threshold, so the ceiling is the only thing holding the
       // count down. Without it this run would found a lineage per birth.
@@ -307,7 +327,7 @@ describe('a running world', () => {
       let peak = 0;
       let founded = 0;
       for (let i = 0; i < 400; i += 1) {
-        const result = advanceTick(state);
+        const result = advanceTick(state, { config: MECHANISM_CONFIG });
         state = result.state;
         founded += result.events.filter((e) => e.kind === 'lineageFounded').length;
         peak = Math.max(peak, countActiveLineages(state.lineages));

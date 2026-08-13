@@ -48,17 +48,24 @@ export const MAX_SNAPSHOT_ORGANISMS = 600;
 export const MAX_SNAPSHOT_STRUCTURES = 300;
 export const MAX_SNAPSHOT_RESOURCES = 400;
 /**
- * Ceiling on the world material catalogue, comfortably above the simulation's own `maxMaterials`.
+ * Ceiling on the world material catalogue served by `/world`.
  *
- * It has to stay above it. This slice is alphabetical by id, so a catalogue larger than this
- * ceiling would drop an arbitrary tail — and every material in that tail renders as a raw id
- * wherever it is referenced, which is precisely the illegibility this catalogue exists to fix.
+ * **No longer coupled to the simulation's `maxMaterials`.** It used to have to stay above it,
+ * because a material absent from this slice rendered as a raw id wherever a snapshot referenced it.
+ * `ResourceDtoSchema.materialLabel` closes that last gap — every material reference in the API now
+ * carries its own label — so truncating here costs field-guide browse depth and nothing else.
  *
- * Tracks `maxMaterials` at the same 1.125x ratio. At ~540 bytes per composite entry the worst case
- * is ~310 kB, which this route can carry because it is sorted for byte-stability and therefore
- * ETag-cached: a spectator fetches it once and then receives 304s.
+ * Severing the coupling was not optional. Discovery does not converge: at
+ * `biomassRegenAtFullLight: 180` three trajectories reached 986/1036/648 materials by tick
+ * 1400-1600 and were still adding 111-187 per 200-tick window, against a deployed world running
+ * six times longer. A catalogue that must contain every material is therefore a catalogue that
+ * grows without bound in world age, on a polled route.
+ *
+ * At ~540 bytes per composite entry, 576 is ~310 kB worst case, which this route can carry because
+ * it is sorted for byte-stability and therefore ETag-cached: a spectator fetches it once and then
+ * receives 304s.
  */
-const MAX_CATALOGUE_MATERIALS = 576;
+export const MAX_CATALOGUE_MATERIALS = 576;
 const MAX_LINEAGE_NODES = 400;
 const MAX_AGENT_MEMORIES = 16;
 
@@ -135,9 +142,12 @@ export function composeSnapshot(state: WorldState, options: SnapshotOptions): Sn
       resourcesTruncated = true;
       break;
     }
+    const chip = materialChip(state, resource.materialId);
     resources.push({
       id: resource.id,
       materialId: resource.materialId,
+      materialLabel: chip.label,
+      materialSubtitle: chip.subtitle,
       x: resource.position.x,
       z: resource.position.z,
       elevation: state.terrain.elevationAtPosition(resource.position),
@@ -267,14 +277,26 @@ export function composeWorldMeta(
 }
 
 /**
- * Every material in the world, in a stable order.
+ * Every material in the world, in a stable order, up to the catalogue ceiling.
  *
- * Sorted by id rather than discovery order so the response is byte-identical for a given world
- * state — that keeps the ETag on this route meaningful and the browser's cache useful.
+ * Sorted for byte-stability so the ETag on this route stays meaningful and the browser's cache
+ * useful. Two keys, in order:
+ *
+ * 1. **Base materials before composites.** A plain alphabetical sort is adversarially wrong here.
+ *    Crafted ids are `mx…` while base ids are words, so the first six materials an alphabetical
+ *    slice drops are `water`, `silt`, `sand`, `stone`, `resin` and `toxinSac` — the substances
+ *    every resource node in the world is made of, and the ones a field guide is most asked about.
+ *    `origin` never changes for a given material, so this key is as stable as the id itself.
+ * 2. **Then by id**, which is what makes the response byte-identical for a given world state.
  */
 function materialCatalogue(state: WorldState): WorldMetaResponse['materials'] {
   return [...state.materials.values()]
-    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .sort((a, b) => {
+      const aBase = a.origin === 'composite' ? 1 : 0;
+      const bBase = b.origin === 'composite' ? 1 : 0;
+      if (aBase !== bBase) return aBase - bBase;
+      return a.id < b.id ? -1 : a.id > b.id ? 1 : 0;
+    })
     .slice(0, MAX_CATALOGUE_MATERIALS)
     .map((material) => ({
       id: material.id,

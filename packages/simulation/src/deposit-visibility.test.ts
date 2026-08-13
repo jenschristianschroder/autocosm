@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { derivePhenotype } from '@autocosm/domain';
+import { DEFAULT_SIMULATION_CONFIG, type SimulationConfig } from './config.js';
 import { observe, resourceVisibilityRadiusCu } from './observe.js';
 import { advanceTick } from './tick.js';
 import { generateWorld } from './worldgen.js';
@@ -63,8 +64,17 @@ describe('a deposit is a landmark, scaled by what is left of it', () => {
 describe('a typical organism can find material to build with', () => {
   /**
    * Asserts the outcome the observation model exists to produce, not the code path that produces
-   * it. Verified to bite: with the bonus disabled and everything else unchanged, this scores 58%
-   * and 19% and fails on both seeds, so the floor is not an assertion that cannot fail.
+   * it. Verified to bite at this world size, by measurement rather than by inheritance: with
+   * `DEPOSIT_LANDMARK_BONUS_CU` set to 0 and nothing else changed, this scores **59% and 60%**
+   * against the 70% floor and fails on both seeds, so the floor is not an assertion that cannot
+   * fail.
+   *
+   * The original calibration recorded 58% and 19% at the pre-supply-fix scale. Those numbers no
+   * longer hold and are not quoted as if they did — the margin at cap 140 is genuinely narrower on
+   * one seed (19% -> 60%), because a smaller world spreads organisms more thinly over the same
+   * deposit field and a blind organism stumbles onto one more often. 10 points of headroom is
+   * thinner than is comfortable; if a future change moves this below the floor, check whether the
+   * *bonus* regressed before assuming the floor needs lowering.
    */
   const HORIZON = 600;
 
@@ -83,9 +93,30 @@ describe('a typical organism can find material to build with', () => {
    */
   const TIMEOUT_MS = 300_000;
 
+  /**
+   * A world of 140, not the default 420.
+   *
+   * Tick cost is superlinear in living organisms — measured at 125s against ~590s for the same
+   * 1400-tick trajectory at caps 140 and 420, ~4.7x — and after `biomassRegenAtFullLight` went
+   * 60 -> 180 both runs here blew the 300s budget above. The budget was not the defect; the world
+   * size was.
+   *
+   * What this file guards is whether a *typical organism* can perceive a deposit. That is a property
+   * of one organism's perception radius against local deposit density, and neither term is a
+   * function of how many organisms the world holds. Measured directly at 200-tick checkpoints, the
+   * share perceiving any deposit is **96-100% at cap 140 and 96-100% at cap 420** — indistinguishable
+   * against a 70% floor. Cap 140 also restores roughly the ~148-organism scale this file's 70% floor
+   * was originally calibrated against, before the supply fix pinned worlds at 420.
+   *
+   * The bite was re-verified at this cap rather than carried over: 59%/60% with the bonus disabled.
+   * See the note on the floor above, including the honest loss of margin on one seed.
+   */
+  const MECHANISM_CONFIG: SimulationConfig = { ...DEFAULT_SIMULATION_CONFIG, maxOrganisms: 140 };
+
   function perceivingAnyDeposit(seed: number, worldId: string): number {
     let state: WorldState = generateWorld({ seed, worldId });
-    for (let index = 0; index < HORIZON; index += 1) state = advanceTick(state).state;
+    for (let index = 0; index < HORIZON; index += 1)
+      state = advanceTick(state, { config: MECHANISM_CONFIG }).state;
 
     let alive = 0;
     let perceiving = 0;

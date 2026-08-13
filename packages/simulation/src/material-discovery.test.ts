@@ -1,6 +1,6 @@
 import { beforeAll, describe, expect, it } from 'vitest';
 
-import { DEFAULT_SIMULATION_CONFIG } from './config.js';
+import { DEFAULT_SIMULATION_CONFIG, type SimulationConfig } from './config.js';
 import { advanceTick } from './tick.js';
 import { generateWorld } from './worldgen.js';
 import type { WorldState } from './state.js';
@@ -73,6 +73,24 @@ import type { WorldState } from './state.js';
  * that this gate passes at the material-identity and structure-effects pair and fails at the
  * identity change alone, so the two are not independently revertible even though they shipped as
  * separate commits.
+ *
+ * **Re-measured after `biomassRegenAtFullLight` went 60 -> 180, and the punctuated-not-convergent
+ * finding is now much stronger than the 4000-tick probe could show.** Three trajectories run to
+ * 2400 ticks with the cap lifted to 100_000, catalogue logged every 200 ticks:
+ *
+ *     tick    4242424/w-mat      7/w-mat        7/wd-probe
+ *     800     303 (+105)         280 (+70)      425 (+171)
+ *     1200    664 (+175)         523 (+111)     849 (+204)
+ *     1600    986 (+151)         766 (+118)     1153 (+117)
+ *     2000    1251 (+152)        885 (+119)     1217 (+64)
+ *     2200    1386 (+135)        -              -
+ *
+ * Growth decelerates and never stops — still +135 per 200 ticks at tick 2200. With supply no longer
+ * the binding constraint, a world invents roughly 4-5x the chemistry it used to over the same span,
+ * and the "reachable combination space closes on its own" claim in this header is now falsified
+ * twice over rather than once. `maxMaterials` was raised 576 -> 8192 on this measurement, and the
+ * comment on that constant records that it is a bound which will bind eventually, not a ceiling
+ * above an asymptote — there is no asymptote to sit above.
  */
 
 /**
@@ -80,25 +98,78 @@ import type { WorldState } from './state.js';
  * nothing affordable does. Its job now is narrower: run long enough that a catalogue explosion or a
  * saturating bound would show up, and no longer.
  *
- * 2400 ticks buys catalogues of 189/403/276 against a bound of 576 — 33%, 70% and 48% of it — with
- * whole-world combine rejections in single digits. It is kept at 2400 rather than trimmed because
- * this is the length at which those figures were measured and because the widest observed spread
- * between trajectories (189 to 403) is itself the reason for the margin assertion below. It is not
- * raised, because the 4000-tick probe is now the evidence for long-run headroom and re-running it
- * every build would cost roughly 77 minutes for a number this file already records.
+ * **Cut 2400 -> 900 when `biomassRegenAtFullLight` went 60 -> 180, and this is a cost change, not a
+ * weakening.** Tick cost scales with living organisms, and the supply fix takes a world from ~148
+ * to a pinned 420 — roughly 2.8x per tick. Left at 2400 this gate would have gone from ~15 minutes
+ * of CI to ~42, against a 40-minute `verify` cap: the gate would have failed the build by timing
+ * out rather than by finding anything. 2400/2.8 ~ 860, so 900 restores its previous cost almost
+ * exactly.
  *
- * This is the dominant cost in the simulation suite and that is deliberate: whether a bound binds is
- * a whole-world property with no cheap proxy.
+ * It explores *more* chemistry than the old horizon did, measured on these same three trajectories
+ * at regen 180 with the cap lifted to 100_000:
+ *
+ *     tick 800    303 / 280 / 425 materials
+ *     tick 1000   489 / 412 / 645
+ *
+ * against 189 / 403 / 276 at tick 2400 under regen 60. Every trajectory at 900 ticks now reaches at
+ * or above where it used to finish, so the shorter horizon is a strictly larger sample of the
+ * material space. Discovery is ~5x faster per tick, which is the whole point of the supply fix.
+ *
+ * **The 2.8x in that estimate was wrong, and this file is where it showed.** Cost was measured, not
+ * derived, after the horizon cut: identical probes at `maxOrganisms` 140 and 420 over the same
+ * trajectory cost 125s and ~590s, so the real multiplier is **~4.7x**, not 2.8x. Cost is superlinear
+ * in population — 3x the organisms costs ~4.7x the time — because per-tick work includes pairwise
+ * neighbour scans. At 900 ticks and three trajectories this file's `beforeAll` blew a 30-minute hook
+ * timeout and took 33.5 minutes, which by itself set the wall-clock of the entire 33.7-minute suite.
+ * The horizon was not the remaining lever; the world size was. See `MECHANISM_CONFIG` below.
  */
-const HORIZON = 2400;
+const HORIZON = 900;
+/**
+ * A world of 140, not the default 420 — and this is a cost change that leaves the assertions
+ * strictly better supplied, which is not what a shortcut looks like.
+ *
+ * Tick cost scales superlinearly with living organisms (measured: 125s at 140 against ~590s at 420
+ * for 1400 ticks, ~4.7x). What this file guards is not a population-scale property. It guards that
+ * **the catalogue bound is not what limits the chemistry** — a claim about the relationship between
+ * discovery and `maxMaterials`, which does not become true or false because a world holds three
+ * times as many organisms.
+ *
+ * The measurement says the smaller world is the *stronger* subject here, which is worth stating
+ * plainly because the expectation runs the other way. Probed at 200-tick checkpoints on seed
+ * 4242424, materials known:
+ *
+ *     tick        200   400   600   800   1000  1200  1400
+ *     cap 140      42   248   400   442    512   561   612
+ *     cap 420      36   115   237   330    469     -     -
+ *
+ * A smaller world discovers **more** chemistry, not less, and does it sooner. That is not a
+ * curiosity — it is this repository's `x-creative-ladder-priced-out` finding reproduced in a
+ * fixture: a world pinned against `maxOrganisms` has no energy surplus, and every rung of the
+ * creative ladder is gated on surplus. So running this gate at the default cap would test discovery
+ * in the regime where discovery is *suppressed*, at 4.7x the price.
+ *
+ * What is deliberately given up: this file no longer observes the at-capacity regime. That regime is
+ * covered on purpose and cheaply elsewhere — `population-saturation.test.ts` runs at
+ * `maxOrganisms: 60` and asserts the world genuinely reaches its ceiling before asserting anything
+ * about behaviour there, and `population.test.ts` pins its own scarcity. Neither depends on the
+ * default cap, so nothing that guarded carrying capacity has been traded away here.
+ */
+const MECHANISM_CONFIG: SimulationConfig = { ...DEFAULT_SIMULATION_CONFIG, maxOrganisms: 140 };
 /**
  * How close to `maxMaterials` a trajectory may finish.
  *
- * "Strictly below the bound" is satisfied at 575 of 576, which would be a world one discovery from
- * silence. Measured trajectories land at 33-70% of the bound at this horizon, and the spread between
- * them is wide enough (189 to 403) that ordinary chaotic variance is the thing most likely to carry
- * a future trajectory over. 90% is therefore the point at which variance alone could cross, which
- * makes it an alarm rather than a rubber stamp.
+ * "Strictly below the bound" is satisfied at 8191 of 8192, which would be a world one discovery
+ * from silence. 90% is the point at which ordinary chaotic variance could carry a trajectory over,
+ * which makes it an alarm rather than a rubber stamp.
+ *
+ * **Honest note on how much this now guards.** It was a sharp alarm when the bound was 576 and
+ * trajectories landed at 33-70% of it. `maxMaterials` has since risen to 8192 — because measurement
+ * showed discovery never converges, so no bound can sit above an asymptote — while the horizon fell
+ * to 900. Trajectories now land near 4-8% of the bound, so this assertion will not fire on ordinary
+ * drift; it fires only on a catalogue explosion. The direct alarm for the bound beginning to bind
+ * is now the combine-rejection assertion at the foot of this file, which is triggered by the first
+ * refusal rather than by a fraction. Both are kept: this one bounds the catalogue, that one detects
+ * saturation, and they fail for different reasons.
  */
 const MAX_CATALOGUE_FRACTION = 0.9;
 const TIMEOUT_MS = 1_800_000;
@@ -129,7 +200,7 @@ function run(seed: number, worldId: string): Run {
   let combineRejections = 0;
 
   for (let index = 0; index < HORIZON; index += 1) {
-    const result = advanceTick(state);
+    const result = advanceTick(state, { config: MECHANISM_CONFIG });
     state = result.state;
     for (const event of result.events) {
       if (event.kind === 'materialDiscovered') {

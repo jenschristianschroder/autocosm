@@ -2,6 +2,32 @@ import { describe, expect, it } from 'vitest';
 import { decayPerTick, repairYield, type MaterialProperties } from '@autocosm/domain';
 
 import { DEFAULT_SIMULATION_CONFIG } from './config.js';
+import type { SimulationConfig } from './config.js';
+
+/**
+ * A world of 140 for the long run at the foot of this file, not the default 420.
+ *
+ * The 1200-tick horizon here is load-bearing and cannot be cut: the `> 500` lifetime threshold
+ * cannot be observed at all below ~600 ticks, so the only affordable lever is world size. Tick cost
+ * is superlinear in living organisms — measured at 125s against ~590s for the same 1400-tick
+ * trajectory at caps 140 and 420, ~4.7x — and after `biomassRegenAtFullLight` went 60 -> 180 this
+ * test blew its 600s budget.
+ *
+ * Permanence is a property of material durability against `decayPerTick`, and repair is a property
+ * of whether the action exists and an organism can afford it. Neither is a function of headcount.
+ * Measured at 200-tick checkpoints on this file's own seed, the smaller world is the better subject:
+ *
+ *     cap 140    repairs 232 by t=1400   longest life achieved 1183 by t=1200
+ *     cap 420    repairs 109 by t=1000   longest life achieved  983 by t=1000
+ *
+ * More repairs, not fewer, against an assertion of `> 0` — because a world pinned against
+ * `maxOrganisms` has no energy surplus, and maintenance is gated on surplus by design (it runs after
+ * construction and needs a full load, so it can only spend what building did not).
+ *
+ * Only this test takes the smaller world. The staged repair tests above build their resolution
+ * context from `DEFAULT_SIMULATION_CONFIG` and must keep the world that matches it.
+ */
+const MECHANISM_CONFIG: SimulationConfig = { ...DEFAULT_SIMULATION_CONFIG, maxOrganisms: 140 };
 import { availableActions } from './capabilities.js';
 import { EnergyLedger, resolveAction, type ResolutionContext } from './resolve.js';
 import { EventSink } from './events.js';
@@ -255,7 +281,7 @@ describe('structure permanence', () => {
       const bornAtTick = new Map<string, number>();
       const lifetimes: number[] = [];
       for (let index = 0; index < 1200; index += 1) {
-        const result = advanceTick(state);
+        const result = advanceTick(state, { config: MECHANISM_CONFIG });
         for (const event of result.events) {
           if (event.kind === 'structureRepaired') repaired += 1;
           if (event.kind === 'structureBuilt') {

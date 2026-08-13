@@ -213,6 +213,20 @@ export type StructureDetailResponse = z.infer<typeof StructureDetailResponseSche
 export const ResourceDtoSchema = z.object({
   id: idSchema,
   materialId: idSchema,
+  /**
+   * Joined server-side rather than looked up in the `/world` catalogue, because the catalogue is a
+   * bounded slice and a resource node is the one place in the API that used to depend on it for
+   * legibility. Every other material reference — structure components, organism inventories, known
+   * materials, recipes — has always carried its own label, so this closes the last gap.
+   *
+   * The dependency was not theoretical and its documented failure mode understated it. The
+   * catalogue slice is alphabetical over ids; crafted ids are `mx…` while base materials are words,
+   * so the first six ids a full catalogue drops are `water`, `silt`, `sand`, `stone`, `resin` and
+   * `toxinSac` — the substances every resource node in the world is actually made of. The tail is
+   * not arbitrary, it is adversarially the worst possible slice.
+   */
+  materialLabel: z.string().max(80),
+  materialSubtitle: z.string().max(200),
   x: z.number().int(),
   z: z.number().int(),
   elevation: z.number().int(),
@@ -482,21 +496,26 @@ export const WorldMetaResponseSchema = z.object({
   /**
    * Every material that exists in this world, keyed by the ids that appear in snapshots.
    *
-   * Lives on `/world` rather than on the snapshot: it is capped at `maxMaterials`, changes only
-   * when something new is discovered, and this route is polled far less often than the snapshot.
-   * A client that meets an unknown material id refetches `/world` rather than growing every frame.
+   * Lives on `/world` rather than on the snapshot: it changes only when something new is
+   * discovered, and this route is polled far less often than the snapshot.
    *
-   * This bound is the outermost link in a chain that has to stay ordered:
-   * `maxMaterials` (576) <= `MAX_CATALOGUE_MATERIALS` (576) <= this. Invert any pair and a full
-   * world either loses an arbitrary alphabetical tail of its catalogue or fails to serve `/world`
-   * at all. `read-model.test.ts` asserts the chain end to end against a saturated catalogue rather
-   * than by comparing the constants, so a future rise in `maxMaterials` fails loudly here.
+   * **This is a browse convenience, not a legibility floor.** It used to be the outermost link in a
+   * chain that had to stay ordered — `maxMaterials` <= `MAX_CATALOGUE_MATERIALS` <= this — because
+   * a material absent from the catalogue rendered as a raw id wherever a snapshot referenced it.
+   * That chain forced the simulation's chemistry bound to be a payload decision, and discovery was
+   * then measured not to converge at all: at `biomassRegenAtFullLight: 180` with the population
+   * pinned at its ceiling, three trajectories reached 986/1036/648 materials by tick 1400-1600 and
+   * were still adding 111-187 per 200-tick window, with a deployed world running six times longer.
+   * No constant satisfies "above convergence" when there is no convergence.
    *
-   * All three now sit at the same value, so the chain is saturated: the simulation may discover
-   * exactly as much chemistry as the catalogue can carry, and not one material more. Raising the
-   * simulation bound from here therefore cannot be done alone — it costs `/world` payload directly
-   * (~1085 bytes per worst-case composite, so ~488 KB at 1024 materials) and wants a catalogue that
-   * selects the materials the world actually references rather than an alphabetical prefix.
+   * The chain is severed instead: `ResourceDtoSchema` now carries `materialLabel`, which was the
+   * last reference in the API that lacked one. Nothing renders a raw id when this slice truncates,
+   * so the bound here is free to be a pure payload decision (~1085 bytes per worst-case composite)
+   * and `maxMaterials` is free to be a pure simulation bound.
+   *
+   * Selection is still deterministic and byte-stable, but no longer a plain alphabetical prefix:
+   * base materials sort ahead of composites, so the fourteen substances the world is built from are
+   * always present in the field guide. See `MAX_CATALOGUE_MATERIALS` in the read model.
    */
   materials: z
     .array(

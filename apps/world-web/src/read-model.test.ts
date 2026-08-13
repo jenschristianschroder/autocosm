@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DEFAULT_SIMULATION_CONFIG, generateWorld } from '@autocosm/simulation';
+import { generateWorld } from '@autocosm/simulation';
 import type { WorldState } from '@autocosm/simulation';
 import {
   asMaterialId,
@@ -20,6 +20,7 @@ import {
   composeStructureDetail,
   composeSnapshot,
   composeWorldMeta,
+  MAX_CATALOGUE_MATERIALS,
 } from './read-model.js';
 
 /**
@@ -243,40 +244,83 @@ describe('snapshot and world catalogue', () => {
   });
 
   it('orders the catalogue stably so the route stays cacheable', () => {
+    // This asserted `ids` equalled `[...ids].sort()` — plain alphabetical order, used as a proxy
+    // for the property the title actually names: the same world state must always produce the same
+    // bytes, or the ETag on this route means nothing. Alphabetical is *a* stable order, not *the*
+    // stable order, and the catalogue now sorts base materials ahead of composites so truncation
+    // cannot drop the substances every resource node is made of. So the proxy is replaced by the
+    // property itself, plus the ordering rule that superseded it — which is strictly stronger than
+    // what was here before, and fails if the sort ever reverts to plain alphabetical.
     const { state } = worldWithLearnedRecipe('irrelevant');
-    const ids = composeWorldMeta(state, { heuristicOnly: false, aiDegraded: false }).materials.map(
-      (m) => m.id,
-    );
-    expect(ids).toEqual([...ids].sort());
+    const compose = (): readonly string[] =>
+      composeWorldMeta(state, { heuristicOnly: false, aiDegraded: false }).materials.map(
+        (m) => m.id,
+      );
+
+    // 1. Stability: two independent compositions of one state agree exactly.
+    expect(compose()).toEqual(compose());
+
+    // 2. The rule: every base material precedes every composite, and ids ascend within each group.
+    const materials = composeWorldMeta(state, {
+      heuristicOnly: false,
+      aiDegraded: false,
+    }).materials;
+    const firstComposite = materials.findIndex((m) => m.origin === 'composite');
+    expect(firstComposite).toBeGreaterThan(0); // the fixture must contain both kinds, or this proves nothing
+    expect(materials.slice(0, firstComposite).every((m) => m.origin !== 'composite')).toBe(true);
+    expect(materials.slice(firstComposite).every((m) => m.origin === 'composite')).toBe(true);
+    for (const group of [materials.slice(0, firstComposite), materials.slice(firstComposite)]) {
+      const ids = group.map((m) => m.id);
+      expect(ids).toEqual([...ids].sort());
+    }
   });
 
-  it('serves a catalogue saturated to the simulation ceiling without dropping any of it', () => {
-    // Three bounds have to stay ordered — `maxMaterials` <= `MAX_CATALOGUE_MATERIALS` <= the
-    // schema's `.max()` — and they live in three packages. Invert a pair and a full world either
-    // loses an arbitrary alphabetical tail (every material in it renders as a raw id, the exact
-    // illegibility this catalogue exists to fix) or fails to serve `/world` at all.
+  it('renders every resource node legibly even when the catalogue truncates', () => {
+    // This used to assert a three-link chain — `maxMaterials` <= `MAX_CATALOGUE_MATERIALS` <= the
+    // schema's `.max()` — because a material absent from the catalogue rendered as a raw id
+    // wherever a snapshot referenced it. That chain made the simulation's chemistry bound a payload
+    // decision, and discovery was then measured not to converge: at `biomassRegenAtFullLight: 180`
+    // three trajectories reached 986/1036/648 materials by tick 1400-1600 and were still adding
+    // 111-187 per 200-tick window. No constant satisfies "above convergence" when there is none.
     //
-    // This asserts the outcome rather than comparing the constants, because comparing constants is
-    // what let them drift: `maxMaterials` was raised to 512 and the read-model slice to 576 while
-    // the schema stayed at 384, so a world past 384 materials would have failed validation live
-    // while every unit test passed. Saturate the world and push it through the real projection.
+    // The chain is severed instead, so what has to be asserted is the *outcome* it was protecting:
+    // a world whose catalogue is truncated still renders every resource node with a real label.
+    //
+    // The old failure mode was worse than its own comment claimed. The slice was alphabetical over
+    // ids; crafted ids are `mx…` while base ids are words, so the six materials it dropped first
+    // were `water`, `silt`, `sand`, `stone`, `resin` and `toxinSac` — the substances every resource
+    // node is made of. That is asserted below rather than described, so a future sort change that
+    // reintroduces it fails here.
     const { state } = worldWithLearnedRecipe('irrelevant');
     const base = BASE_MATERIALS[0];
     if (base === undefined) throw new Error('no base materials to clone');
 
+    // Saturate well past the catalogue ceiling with composites, which is what a long-lived world
+    // does. `mx…` ids sort after most base words, so an alphabetical slice would evict them.
     const saturated = new Map(state.materials);
     let filler = 0;
-    while (saturated.size < DEFAULT_SIMULATION_CONFIG.maxMaterials) {
+    while (saturated.size < MAX_CATALOGUE_MATERIALS * 3) {
       const id = asMaterialId(`mxfill${(filler++).toString(36).padStart(6, '0')}`);
-      saturated.set(id, { ...base, id });
+      saturated.set(id, { ...base, id, origin: 'composite' });
+    }
+    const fullState = { ...state, materials: saturated };
+
+    const meta = composeWorldMeta(fullState, { heuristicOnly: false, aiDegraded: false });
+    expect(meta.materials).toHaveLength(MAX_CATALOGUE_MATERIALS);
+    expect(() => WorldMetaResponseSchema.parse(meta)).not.toThrow();
+
+    // Every base material survives the truncation, so the field guide never loses `water`.
+    const catalogued = new Set(meta.materials.map((m) => m.id));
+    for (const material of BASE_MATERIALS) {
+      expect(catalogued.has(material.id)).toBe(true);
     }
 
-    const meta = composeWorldMeta(
-      { ...state, materials: saturated },
-      { heuristicOnly: false, aiDegraded: false },
-    );
-
-    expect(meta.materials).toHaveLength(DEFAULT_SIMULATION_CONFIG.maxMaterials);
-    expect(() => WorldMetaResponseSchema.parse(meta)).not.toThrow();
+    // And legibility no longer depends on that at all: the snapshot carries its own labels.
+    const snapshot = composeSnapshot(fullState, { radius: 2 });
+    expect(snapshot.resources.length).toBeGreaterThan(0);
+    for (const resource of snapshot.resources) {
+      expect(resource.materialLabel).not.toBe('');
+      expect(resource.materialLabel).not.toBe(resource.materialId);
+    }
   });
 });
