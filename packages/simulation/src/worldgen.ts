@@ -445,13 +445,27 @@ function buildRegion(
   };
 }
 
-/** Material availability by biome. Constrains what a lineage can possibly discover locally. */
+/**
+ * Material availability by biome. Constrains what a lineage can possibly discover locally.
+ *
+ * A material reachable from only one biome is reachable only as often as that biome is generated,
+ * and `ridge` is the rarest terrain there is — 2 regions in 1,280 across 20 seeds, and none at all
+ * before `RIDGE_MIN_ELEVATION_CU` was corrected. `lightCrystal` was listed there and nowhere else,
+ * so it had zero deposits in every world ever generated. That is not a cosmetic gap: it is the only
+ * base material carrying photosensitivity *and* conductivity together, and removing it collapses the
+ * set of reachable materials clearing both drivers from 40–72 down to exactly 1 (measured over a
+ * four-generation combination closure). `phosphorescing` was consequently never once the best
+ * available reaction in any organism's inventory, across every sampled tick of three worlds.
+ *
+ * It is therefore also sourced from `highland` — 57 regions in those same 1,280, so still scarce,
+ * but present in 19 of 20 worlds rather than 0.
+ */
 const BIOME_MATERIALS: Readonly<Record<Biome, readonly string[]>> = Object.freeze({
   abyss: ['silt', 'mineralSalt', 'stone', 'biofilm'],
   shallows: ['silt', 'algaeMat', 'biofilm', 'sand', 'fibre'],
   shore: ['sand', 'clay', 'fibre', 'algaeMat', 'resin', 'biofilm'],
   plain: ['clay', 'fibre', 'resin', 'chitin', 'sand', 'toxinSac'],
-  highland: ['stone', 'mineralSalt', 'chitin', 'clay', 'carapaceShard'],
+  highland: ['stone', 'mineralSalt', 'chitin', 'clay', 'carapaceShard', 'lightCrystal'],
   ridge: ['stone', 'lightCrystal', 'mineralSalt', 'carapaceShard'],
 });
 

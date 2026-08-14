@@ -128,13 +128,31 @@ function smoothstepPerMille(t: number): number {
   return Math.trunc((3 * x * x) / 1000 - (2 * x * x * x) / 1_000_000);
 }
 
+/**
+ * Lowest region-mean elevation classified as `ridge`.
+ *
+ * Measured, not chosen: this function is fed a region *mean* (`worldgen.ts` classifies from
+ * `survey.meanElevationCu`), and averaging over a `REGION_SPAN_CU` square smooths the octaves hard.
+ * Across 1,280 regions from 20 seeds the highest region mean is **1907**, so the previous threshold
+ * of 2200 — reachable for a *point*, where the octaves sum to 3080 — could never be met by the
+ * statistic it tests. Every world ever generated had zero ridge regions, which made `lightCrystal`
+ * unobtainable and two reaction rules dead in play.
+ *
+ * 1800 is the highest value that still admits a ridge (2 of those 1,280 regions), keeping the biome
+ * the rarest terrain in the world while costing `highland` only those same 2. No lower threshold
+ * helps enough to justify itself: at 1200 — a mere 100 above highland's floor — ridge still reaches
+ * only 9 of 20 seeds while swallowing two thirds of highland (57 regions to 19). Ridge is therefore
+ * a genuine summit and cannot be the sole source of anything the world needs; see `BIOME_MATERIALS`.
+ */
+export const RIDGE_MIN_ELEVATION_CU: Cu = 1800;
+
 /** Classify terrain into a biome purely from elevation. */
 export function biomeForElevation(elevationCu: Cu): Biome {
   if (elevationCu < -1200) return 'abyss';
   if (elevationCu < -150) return 'shallows';
   if (elevationCu < 150) return 'shore';
   if (elevationCu < 1100) return 'plain';
-  if (elevationCu < 2200) return 'highland';
+  if (elevationCu < RIDGE_MIN_ELEVATION_CU) return 'highland';
   return 'ridge';
 }
 
@@ -144,5 +162,5 @@ export const HABITAT_ELEVATION_TARGET: Readonly<Record<string, readonly [Cu, Cu]
   shallows: [-1200, -150],
   shore: [-150, 150],
   plain: [150, 1100],
-  highland: [1100, 2200],
+  highland: [1100, RIDGE_MIN_ELEVATION_CU],
 });

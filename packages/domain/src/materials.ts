@@ -357,23 +357,36 @@ interface PropertyReactionRule {
  *
  * Every rule reads the same immutable blend, so the set is commutative and order-independent.
  *
- * **Measured, and only half of this table is live.** Seed 7 over 2000 ticks produced 500 composites;
- * 67% of them carry at least one reaction, so hull escape genuinely happens rather than being a
- * theoretical property. But the firings are concentrated in two rules, and three never fire at all:
+ * **Measured, and the earlier attribution in this comment was wrong.** Seed 7 over 2000 ticks
+ * produced 500 composites; 67% carry at least one reaction, so hull escape genuinely happens. But
+ * the firings concentrate in two rules, and three barely fire at all:
  *
  *     rendering 221 · sintering 115 · tempering 3 · vitrifying 0 · concentrating 0 · phosphorescing 0
  *
- * That is *not* unreachability. Sweeping all ordered base-material pairs across six quantity ratios
- * (1092 combinations) fires every rule: vitrifying 103, phosphorescing 97, concentrating 10. The
- * three dead rules are reachable and simply never reached, because combination is blind — the
- * heuristic takes `self.inventory[0]` and `[1]`, whichever two materials gather order happened to
- * leave in the first slots, at half of each. It never selects a pair *for* what the pair would
- * produce, even though every inventory entry already carries `hardness` and `density` for exactly
- * that kind of choice.
+ * This comment used to attribute that to blind selection — the heuristic combines `inventory[0]`
+ * and `[1]`, whichever two materials gather order happened to leave in the first slots — on the
+ * strength of a sweep over all ordered base-material pairs that fired every rule. **Both halves of
+ * that were falsified.**
  *
- * So reactions widen the reachable space and the world then samples it by accident. Directed
- * combination is the follow-up that would make the other half of this table matter; until then,
- * expect roughly two live reactions rather than six.
+ * The sweep swept the *catalogue*, not the *world*. It included `lightCrystal`, which had zero
+ * deposits in every world ever generated: its only biome palette was `ridge`, and `ridge` required
+ * a region-mean elevation that the terrain generator's averaging could not reach (see
+ * `RIDGE_MIN_ELEVATION_CU`). `lightCrystal` is the only base material carrying photosensitivity
+ * *and* conductivity, and without it the set of reachable materials clearing both `phosphorescing`
+ * drivers collapses from 40–72 to exactly **1** — a single route, through `algaeMat` and
+ * `mineralSalt`, whose biome palettes are disjoint and sit at opposite ends of the elevation range.
+ * That is why `phosphorescing` was never once the *best available* reaction in any organism's
+ * inventory across every sampled tick of three worlds, let alone the one blindly chosen.
+ *
+ * And selection was never the binding constraint. Measured over ~6,000 inventories per seed, blind
+ * `[0],[1]` already fires some reaction in 55–65% of bags where a reaction is possible; choosing
+ * the best available pair reaches 69–79%. Directed combination is worth roughly +14 points on the
+ * rules that already fire and cannot resurrect the ones that do not, because their ingredients were
+ * not in the bag to be chosen.
+ *
+ * `world-reachability.test.ts` now pins the supply side of this, per world rather than in aggregate.
+ * Expect this table to shift once worlds generate `lightCrystal` deposits; it has not yet been
+ * re-measured over a long run.
  */
 const REACTIONS: readonly PropertyReactionRule[] = [
   {
