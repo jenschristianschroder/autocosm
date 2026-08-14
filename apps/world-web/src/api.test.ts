@@ -1,7 +1,7 @@
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
 import { InMemoryWorldRepository, saveWorldBundle } from '@autocosm/storage';
 import { Logger, Metrics, memorySink, type LogRecord } from '@autocosm/observability';
 import { advanceTick, generateWorld, toRecords } from '@autocosm/simulation';
@@ -86,6 +86,22 @@ function cookieFrom(headers: Record<string, unknown>): string {
   const first = Array.isArray(raw) ? String(raw[0]) : String(raw ?? '');
   return first.split(';')[0] ?? '';
 }
+
+/**
+ * Pay the module graph's one-time cost before anything is timed.
+ *
+ * Whichever test builds the first server absorbs Vite's transform of the Fastify plugin graph, and
+ * that cost is charged against vitest's 5 000 ms default. The route-table test below was already
+ * stripped of its world seeding for exactly this reason and *still* timed out at 5 000 ms under
+ * full-suite contention, while the tests behind it — each doing strictly more work — finished in
+ * milliseconds. Same defect and same remedy as `world-admin/server.test.ts`: warming the graph once
+ * restores the property every timeout in this file claims to have, which is that a slow *handler*
+ * fails and a slow *import* does not.
+ */
+beforeAll(async () => {
+  const { app } = await harness({}, { seedWorld: false });
+  await app.close();
+}, 60_000);
 
 describe('observer boundary', () => {
   it('exposes exactly two mutation routes, both authoring intent rather than world state', async () => {

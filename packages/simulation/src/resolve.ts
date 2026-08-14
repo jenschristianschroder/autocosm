@@ -1,7 +1,6 @@
 import {
   MAX_INVENTORY_ENTRIES,
   MAX_KNOWN_MATERIALS,
-  MAX_KNOWN_RECIPES,
   MAX_KNOWN_STRUCTURES,
   MAX_MEMORY_NOTE_LENGTH,
   MAX_STRUCTURE_USAGE_RECORDS,
@@ -9,6 +8,7 @@ import {
   MIN_STRUCTURE_VOLUME,
   PER_MILLE,
   SIGNAL_LIFETIME_TICKS,
+  retainRecipes,
   asMaterialId,
   asMemoryId,
   asOrganismId,
@@ -1067,7 +1067,7 @@ function learnRecipe(
   const agent = ctx.draft.agents.get(agentId);
   if (!agent) return;
   if (agent.knowledge.recipes.some((r) => r.key === key)) return;
-  const recipes = [
+  const recipes = retainRecipes([
     ...agent.knowledge.recipes,
     {
       key,
@@ -1079,7 +1079,7 @@ function learnRecipe(
         ? {}
         : { learnedFromLineageId: provenance.fromLineageId }),
     },
-  ].slice(-MAX_KNOWN_RECIPES);
+  ]);
   ctx.draft.agents.set(agentId, { ...agent, knowledge: { ...agent.knowledge, recipes } });
 }
 

@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { DRIVE_IDS, HABITAT_PREFERENCES, SIGNAL_CHANNELS } from './entities.js';
+import { DRIVE_IDS, HABITAT_PREFERENCES, MAX_KNOWN_RECIPES, SIGNAL_CHANNELS } from './entities.js';
 import { asMaterialId } from './ids.js';
 import { deriveRecipeKey, MATERIAL_PROPERTY_IDS } from './materials.js';
 import { deriveMaterialName } from './naming.js';
@@ -154,7 +154,11 @@ export const AgentRecordSchema = versioned({
     knownMaterialIds: z.array(idSchema).max(64),
     recipes: z
       .array(KnownRecipeRecordSchema)
-      .max(24)
+      // Derived, not a second literal: the simulation must never be able to write an agent that
+      // persistence then refuses to read back. Raising the constant raises this in lockstep, and a
+      // recipe costs ~200 chars against `MAX_BODY_CHARS = 30_000`, so the envelope binds first at
+      // roughly 150.
+      .max(MAX_KNOWN_RECIPES)
       // Deriving `key` on read can make two stored rows collide, because a world may hold the same
       // procedure recorded under both the old and the new scheme. Keeping the first is the same
       // rule `learnRecipe` applies, so a loaded agent knows exactly what a freshly taught one would.

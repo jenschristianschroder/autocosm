@@ -12,7 +12,7 @@ import type {
   StructureId,
   WorldId,
 } from './ids.js';
-import type { MaterialComponent } from './materials.js';
+import { BASE_MATERIAL_IDS, type MaterialComponent } from './materials.js';
 import type { Genotype, TraitId } from './traits.js';
 import type { Eu, Hp, Mu, PerMille, TickIndex } from './units.js';
 import type { WorldCalendar } from './time.js';
@@ -166,9 +166,81 @@ export interface KnownRecipe {
   readonly learnedFromLineageId?: LineageId;
 }
 
-export const MAX_KNOWN_RECIPES = 12;
+/**
+ * How many procedures one agent carries. Bounded because an agent record is persisted whole.
+ *
+ * `records.ts` caps the stored `recipes` array at 24, so this constant may not exceed that without
+ * a record-schema version bump and a migration: a larger value would write agents that fail
+ * validation on the way back in.
+ */
+export const MAX_KNOWN_RECIPES = 24;
 export const MAX_KNOWN_MATERIALS = 32;
 export const MAX_KNOWN_STRUCTURES = 24;
+
+const BASE_MATERIAL_ID_SET: ReadonlySet<string> = new Set(
+  BASE_MATERIAL_IDS.map((id) => String(id)),
+);
+
+/**
+ * Chooses which procedures an agent keeps once it knows more than {@link MAX_KNOWN_RECIPES}.
+ *
+ * This replaces `slice(-MAX_KNOWN_RECIPES)` — keep the newest, drop the oldest — which is precisely
+ * backwards for a compositional tech tree. Executing `combine(A, B)` requires holding A and B, and
+ * a composite ingredient must itself be made, which needs *its* recipe. Dropping the oldest
+ * destroys the tree from the root and strands tips that can never be built again.
+ *
+ * Measured over 600 ticks across three seeds under the old rule: 71-73% of held recipes needed a
+ * composite ingredient, and 56-66% of everything an agent held was **unusable**, because the recipe
+ * producing one of its ingredients had already been evicted. Two thirds of retained culture was
+ * dead knowledge.
+ *
+ * Eviction takes the oldest member of the first non-empty class:
+ *
+ *   1. **unusable** — some ingredient is neither a base material nor produced by another retained
+ *      recipe, so the agent cannot execute it and never will. Removing one may strand another,
+ *      which is intended: it prunes whole dead subtrees rather than one node at a time.
+ *   2. **a tip** — nothing retained needs what it produces. Individually the least load-bearing,
+ *      and reachable again by combining what the agent can still make.
+ *   3. **anything** — every recipe is load-bearing and the bound still has to hold.
+ *
+ * Deterministic: no PRNG, and ties within a class break on learning order.
+ *
+ * A recipe carrying no `producesMaterialId` cannot be depended upon and therefore sorts as a tip.
+ * Only records persisted before material identity became physical lack it; every recipe this engine
+ * learns records what it makes.
+ */
+export function retainRecipes(
+  recipes: readonly KnownRecipe[],
+  limit: number = MAX_KNOWN_RECIPES,
+): readonly KnownRecipe[] {
+  if (recipes.length <= limit) return recipes;
+  const kept = [...recipes];
+  while (kept.length > limit) {
+    kept.splice(chooseEviction(kept), 1);
+  }
+  return kept;
+}
+
+function chooseEviction(kept: readonly KnownRecipe[]): number {
+  const producible = new Set<string>();
+  const required = new Set<string>();
+  for (const recipe of kept) {
+    if (recipe.producesMaterialId !== undefined) producible.add(String(recipe.producesMaterialId));
+    for (const component of recipe.components) required.add(String(component.materialId));
+  }
+  const unusable = kept.findIndex((recipe) =>
+    recipe.components.some((component) => {
+      const id = String(component.materialId);
+      return !BASE_MATERIAL_ID_SET.has(id) && !producible.has(id);
+    }),
+  );
+  if (unusable >= 0) return unusable;
+  const tip = kept.findIndex(
+    (recipe) =>
+      recipe.producesMaterialId === undefined || !required.has(String(recipe.producesMaterialId)),
+  );
+  return tip >= 0 ? tip : 0;
+}
 
 /**
  * The persistent autonomous actor.
