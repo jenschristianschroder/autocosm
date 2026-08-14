@@ -112,6 +112,7 @@ function findTeacher(state: WorldState): {
 function stageTeaching(state: WorldState): {
   state: WorldState;
   recipe: KnownRecipe;
+  teacherId: OrganismId;
   listenerId: OrganismId;
   listenerAgentId: AgentId;
 } {
@@ -161,9 +162,32 @@ function stageTeaching(state: WorldState): {
   return {
     state: { ...staged, organisms, signals: [signal] },
     recipe,
+    teacherId: teacher.id,
     listenerId: listener.id,
     listenerAgentId: listener.agentId,
   };
+}
+
+/**
+ * The `knowledgeShared` events produced by *this* staged teaching, and no others.
+ *
+ * These assertions used to count every `knowledgeShared` event in the world, which was only ever
+ * correct while ambient transmission produced none — the state the roadmap recorded for the whole
+ * life of the project. Directed combination gave agents deep, usable recipe trees, other organisms
+ * started teaching and inspecting on their own, and the counts became 3 and 2 against expectations
+ * of 1 and 0. The assertion was never about the world; it is about one staged teacher reaching one
+ * staged listener, so it is scoped to the recipe and the organism that carried it.
+ */
+function sharedByStagedTeaching(
+  events: readonly WorldEvent[],
+  staged: { recipe: KnownRecipe; teacherId: OrganismId },
+): readonly WorldEvent[] {
+  return events.filter(
+    (e) =>
+      e.kind === 'knowledgeShared' &&
+      e.organismId === staged.teacherId &&
+      (e.payload as { recipeKey?: string } | undefined)?.recipeKey === staged.recipe.key,
+  );
 }
 
 describe('recipe identity', () => {
@@ -182,7 +206,7 @@ describe('recipe identity', () => {
 
     const result = advanceTick(staged.state);
 
-    const shared = result.events.filter((e) => e.kind === 'knowledgeShared');
+    const shared = sharedByStagedTeaching(result.events, staged);
     expect(shared.length).toBe(1);
     expect(shared[0]?.payload).toMatchObject({ recipeKey: staged.recipe.key });
 
@@ -212,7 +236,7 @@ describe('recipe identity', () => {
 
     const result = advanceTick({ ...staged.state, agents });
 
-    expect(result.events.filter((e) => e.kind === 'knowledgeShared')).toHaveLength(0);
+    expect(sharedByStagedTeaching(result.events, staged)).toHaveLength(0);
     const matching = result.state.agents
       .get(listenerAgentId)
       ?.knowledge.recipes.filter((r) => r.key === staged.recipe.key);

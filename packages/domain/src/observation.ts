@@ -197,10 +197,19 @@ export interface ObservedSignal {
   readonly recipeLabel?: string | undefined;
 }
 
-/** A recipe the observer already knows. `key` is the handle; `label` is only for comprehension. */
+/**
+ * A recipe the observer already knows. `key` is the handle; `label` is only for comprehension.
+ *
+ * `components` and `producesMaterialId` are what make the knowledge *actionable*. Without them an
+ * organism could see that it knew a procedure but not what went into it or what came out, so no
+ * policy — heuristic or model — could deliberately reproduce one, and the only combination
+ * available to anybody was a blind pairing of whatever sat first in the inventory.
+ */
 export interface ObservedRecipe {
   readonly key: string;
   readonly label: string;
+  readonly components: readonly { readonly materialId: MaterialId; readonly quantity: number }[];
+  readonly producesMaterialId?: MaterialId | undefined;
 }
 
 /**
@@ -511,7 +520,18 @@ export const ObservationSchema = z.object({
   drives: z.record(z.enum(DRIVE_IDS), perMille),
   temperament: z.enum(['cautious', 'balanced', 'bold', 'gregarious', 'solitary']),
   aspiration: boundedText(280),
-  knownRecipes: z.array(z.object({ key: boundedText(64), label: boundedText(64) })).max(32),
+  knownRecipes: z
+    .array(
+      z.object({
+        key: boundedText(64),
+        label: boundedText(64),
+        components: z
+          .array(z.object({ materialId: brandedId<'MaterialId'>(), quantity: z.number().int() }))
+          .max(8),
+        producesMaterialId: brandedId<'MaterialId'>().optional(),
+      }),
+    )
+    .max(32),
   availableActions: z.array(boundedText(32)).max(32),
 });
 

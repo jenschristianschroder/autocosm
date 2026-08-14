@@ -358,7 +358,12 @@ export function observe(
     },
     temperament: agent?.temperament ?? 'balanced',
     aspiration: agent?.aspiration ?? '',
-    knownRecipes: (agent?.knowledge.recipes ?? []).map((r) => ({ key: r.key, label: r.label })),
+    knownRecipes: (agent?.knowledge.recipes ?? []).map((r) => ({
+      key: r.key,
+      label: r.label,
+      components: r.components.map((c) => ({ materialId: c.materialId, quantity: c.quantity })),
+      ...(r.producesMaterialId === undefined ? {} : { producesMaterialId: r.producesMaterialId }),
+    })),
     availableActions: availableActions(organism, p),
   };
 }
