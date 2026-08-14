@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
   asMaterialId,
+  BASE_MATERIAL_IDS,
   combineMaterials,
   derivePhenotype,
   deriveRecipeKey,
+  MAX_KNOWN_RECIPES,
   scaleByPerMille,
   type AgentId,
   type KnownRecipe,
@@ -190,6 +192,33 @@ function sharedByStagedTeaching(
   );
 }
 
+/**
+ * A chain of `length` recipes where each is reachable only through the one before it.
+ *
+ * Constructed rather than harvested from the world: whether any agent happens to sit on a deep
+ * tech tree at a given tick is a property of the trajectory, and what gets discarded when one is
+ * full is a property of the mechanism. Only the second is under test.
+ */
+function deepChain(length: number): KnownRecipe[] {
+  const [baseA, baseB] = BASE_MATERIAL_IDS;
+  if (!baseA || !baseB) throw new Error('the world has no base materials');
+  const chain: KnownRecipe[] = [];
+  for (let i = 0; i < length; i += 1) {
+    const previous = chain[i - 1]?.producesMaterialId ?? baseA;
+    chain.push({
+      key: `k-chain-${i}`,
+      label: `chain ${i}`,
+      components: [
+        { materialId: previous, quantity: 10 },
+        { materialId: baseB, quantity: 10 },
+      ],
+      learnedAtTick: i,
+      producesMaterialId: asMaterialId(`mx-chain-${i}`),
+    });
+  }
+  return chain;
+}
+
 describe('recipe identity', () => {
   const { state, events } = run;
 
@@ -242,6 +271,55 @@ describe('recipe identity', () => {
       ?.knowledge.recipes.filter((r) => r.key === staged.recipe.key);
     expect(matching).toHaveLength(1);
     expect(matching?.[0]?.label).toBe('a-different-name');
+  });
+
+  it('does not destroy what the listener already knew in order to make room', () => {
+    // `132c228` replaced FIFO eviction with a dependency-aware policy, because keeping the newest
+    // recipes destroys a compositional tech tree from the root: measured, 56-66 % of what FIFO
+    // retained was *unusable*, its ingredients no longer producible. `resolve.ts` was updated;
+    // this path, which is the one cultural transmission runs on, kept a hand-rolled
+    // `.slice(-12)` — the superseded policy at the superseded cap, and a third independent copy
+    // of a bound that `132c228` had just finished deriving in one place.
+    //
+    // So being taught truncated the listener's knowledge to half the legal capacity and threw
+    // away its foundations, FIFO, to do it. The single act cultural transmission exists to
+    // perform actively damaged the recipient. It was invisible because ambient teaching produced
+    // zero events for the life of the project; directed combination gave agents deep enough
+    // recipe trees for this path to start firing.
+    const staged = stageTeaching(state);
+    const agents = new Map(staged.state.agents);
+    const agent = agents.get(staged.listenerAgentId);
+    if (!agent) throw new Error('listener has no agent');
+
+    // Exactly at capacity, so the taught recipe forces precisely one eviction and the two policies
+    // are made to disagree about which. The chain is entirely usable; the stranded recipe is not,
+    // and it is *newer* than the chain's root — so FIFO drops the root while the dependency-aware
+    // policy drops the stranded one. A partial fix that corrects only the bound still fails here.
+    const chain = deepChain(MAX_KNOWN_RECIPES - 1);
+    const stranded: KnownRecipe = {
+      key: 'k-stranded',
+      label: 'stranded',
+      components: [{ materialId: asMaterialId('mx-never-produced'), quantity: 10 }],
+      learnedAtTick: chain.length,
+      producesMaterialId: asMaterialId('mx-stranded'),
+    };
+    agents.set(staged.listenerAgentId, {
+      ...agent,
+      knowledge: { ...agent.knowledge, recipes: [...chain, stranded] },
+    });
+
+    const result = advanceTick({ ...staged.state, agents });
+    const after = result.state.agents.get(staged.listenerAgentId)?.knowledge.recipes ?? [];
+
+    expect(after.some((r) => r.key === staged.recipe.key)).toBe(true);
+    expect(after).toHaveLength(MAX_KNOWN_RECIPES);
+
+    // The root matters most and is exactly what FIFO drops first: every later link is reachable
+    // only through it, so losing it strands the whole chain.
+    const kept = new Set(after.map((r) => r.key));
+    const lost = chain.filter((r) => !kept.has(r.key)).map((r) => r.key);
+    expect(lost).toEqual([]);
+    expect(kept.has('k-stranded')).toBe(false);
   });
 
   it('identifies a recipe by its ingredients and records what it makes', () => {

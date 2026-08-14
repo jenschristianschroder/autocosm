@@ -43,7 +43,13 @@ import { EventSink } from './events.js';
 import { meanGenotypeOf, reproduce } from './evolution.js';
 import { decideHeuristically } from './heuristics.js';
 import { observe } from './observe.js';
-import { EnergyLedger, absorbEnergy, resolveAction, type ResolutionContext } from './resolve.js';
+import {
+  EnergyLedger,
+  absorbEnergy,
+  learnRecipe,
+  resolveAction,
+  type ResolutionContext,
+} from './resolve.js';
 import { countActiveLineages } from './speciation.js';
 import { structureEffectsAt } from './structure-effects.js';
 import {
@@ -618,20 +624,19 @@ function propagateKnowledge(draft: WorldDraft, events: EventSink): void {
       const agent = draft.agents.get(listener.agentId);
       if (!agent) continue;
       if (agent.knowledge.recipes.some((r) => r.key === signal.recipe?.key)) continue;
-      draft.agents.set(agent.id, {
-        ...agent,
-        knowledge: {
-          ...agent.knowledge,
-          recipes: [
-            ...agent.knowledge.recipes,
-            {
-              ...signal.recipe,
-              learnedAtTick: draft.world.tick,
-              learnedFromLineageId: signal.lineageId,
-            },
-          ].slice(-12),
+      learnRecipe(
+        draft,
+        listener.agentId,
+        signal.recipe.key,
+        signal.recipe.label,
+        signal.recipe.components,
+        {
+          ...(signal.recipe.producesMaterialId === undefined
+            ? {}
+            : { produces: signal.recipe.producesMaterialId }),
+          fromLineageId: signal.lineageId,
         },
-      });
+      );
       taught.push(listener.lineageId);
     }
     if (taught.length > 0) {

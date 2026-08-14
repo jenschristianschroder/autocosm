@@ -666,9 +666,14 @@ function applyCombine(
   });
   learnMaterial(ctx, organism.agentId, derivedId);
   // The recipe is labelled by what it produces, so its label always matches the material.
-  learnRecipe(ctx, organism.agentId, deriveRecipeKey(components), definition.label, components, {
-    produces: derivedId,
-  });
+  learnRecipe(
+    ctx.draft,
+    organism.agentId,
+    deriveRecipeKey(components),
+    definition.label,
+    components,
+    { produces: derivedId },
+  );
   if (!existing) {
     ctx.events.emit('materialDiscovered', organism.regionId, {
       summary: `${organism.id} produced ${definition.label}`,
@@ -1056,15 +1061,23 @@ function learnStructure(
   });
 }
 
+/**
+ * Records a procedure an agent now knows, subject to {@link retainRecipes}.
+ *
+ * Takes the draft rather than a `ResolutionContext` because cultural transmission runs outside
+ * action resolution and must not grow its own copy of this: `tick.ts` previously appended and
+ * `slice(-12)`d inline, which meant being taught truncated the listener to half the legal
+ * capacity and discarded its foundations FIFO. One writer, one retention policy, one bound.
+ */
 function learnRecipe(
-  ctx: ResolutionContext,
+  draft: WorldDraft,
   agentId: Organism['agentId'],
   key: string,
   label: string,
   components: readonly MaterialComponent[],
   provenance: { readonly produces?: MaterialId; readonly fromLineageId?: LineageId } = {},
 ): void {
-  const agent = ctx.draft.agents.get(agentId);
+  const agent = draft.agents.get(agentId);
   if (!agent) return;
   if (agent.knowledge.recipes.some((r) => r.key === key)) return;
   const recipes = retainRecipes([
@@ -1073,14 +1086,14 @@ function learnRecipe(
       key,
       label,
       components,
-      learnedAtTick: ctx.draft.world.tick,
+      learnedAtTick: draft.world.tick,
       ...(provenance.produces === undefined ? {} : { producesMaterialId: provenance.produces }),
       ...(provenance.fromLineageId === undefined
         ? {}
         : { learnedFromLineageId: provenance.fromLineageId }),
     },
   ]);
-  ctx.draft.agents.set(agentId, { ...agent, knowledge: { ...agent.knowledge, recipes } });
+  draft.agents.set(agentId, { ...agent, knowledge: { ...agent.knowledge, recipes } });
 }
 
 export { learnRecipe, learnMaterial, learnStructure };
@@ -1126,7 +1139,7 @@ function learnRecipesFromStructure(
     const key = deriveRecipeKey(derivedFrom);
     if (known.has(key)) continue;
     known.add(key);
-    learnRecipe(ctx, organism.agentId, key, definition.label, derivedFrom, {
+    learnRecipe(ctx.draft, organism.agentId, key, definition.label, derivedFrom, {
       produces: definition.id,
       fromLineageId: structure.createdByLineageId,
     });
