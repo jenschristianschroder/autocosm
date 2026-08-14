@@ -1,5 +1,6 @@
 import {
   Prng,
+  WORTH_FEEDING_MU,
   clampPerMille,
   hashSeed,
   makePosition,
@@ -98,9 +99,12 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     return { type: 'move', target: away };
   }
 
-  // 2. Starving. Eat whatever is reachable, otherwise rest to lower the burn rate.
+  // 2. Starving. Eat whatever is reachable, otherwise rest to lower the burn rate. Travel to a
+  //    node is allowed here where branch 6 forbids it: migration is a journey of tens of ticks and
+  //    an organism this far down will not survive one, so the nearest bounded food wins. Nodes
+  //    deplete, so this cannot capture a turn indefinitely the way the regional graze could.
   if (energyRatio < 250) {
-    const feed = nearestFeeding(observation, canReach);
+    const feed = nearestFeeding(observation, canReach, true);
     if (feed) return feed;
     if (observation.environment.biomass > 0) {
       return { type: 'consume', targetKind: 'biomass' };
@@ -174,14 +178,95 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     }
   }
 
-  // 6. Feed opportunistically. Anything below a comfortable reserve tops up first, so
-  //    building and exploring only happen from a position of strength.
+  // 6. Feed where you stand. Anything below a comfortable reserve tops up first, so building and
+  //    exploring only happen from a position of strength. This branch offers *meals*, never
+  //    journeys: biomass underfoot worth a turn, or a node already within interaction range.
+  //
+  //    The regional graze needs the ground to be worth a turn, not merely non-empty. `biomass > 0`
+  //    was the test here, and it is what made the migration branch below unreachable: regrowth
+  //    lays down a few mu every tick, so a stripped region always has *something* and every hungry
+  //    organism standing on it spent its turn on that something. Worse, `applyConsume` takes
+  //    `min(biomass, appetite)` from a pool the whole region shares — measured in production, 319
+  //    organisms on 193 mu means roughly five of them eat and the other 314 are rejected with
+  //    `unknownTarget`, having spent the turn anyway.
   if (energyRatio < 620) {
-    const feed = nearestFeeding(observation, canReach);
+    const feed = nearestFeeding(observation, canReach, false);
     if (feed) return feed;
-    if (observation.environment.biomass > 0) {
+    if (observation.environment.biomass >= WORTH_FEEDING_MU) {
       return { type: 'consume', targetKind: 'biomass' };
     }
+  }
+
+  // 6b. Follow the food. Reached only by an organism branch 6 could not feed: hungry, nothing
+  //     within reach, and nothing underfoot worth stopping for.
+  //
+  //     Measured in production at tick 15,208: 319 organisms on 193 mu in one region, 44 in
+  //     another, and 23 of the 25 regions in view empty and pinned at the 6000 mu cap. That is
+  //     why raising biomass regeneration 60 -> 180 changed nothing — it raised supply in regions
+  //     already at their ceiling. Standing next to the food is the binding constraint, not the
+  //     amount of it.
+  //
+  //     `richerNeighbours` already applies the ratio and the floor, so reaching here at all
+  //     means the trip is worth taking. The nearest qualifying region wins rather than the
+  //     richest: every one of them clears the same bar, so the cheapest crossing is the right
+  //     one, and a starving organism has the least energy to spend on travel.
+  //
+  //     The target is the region's centre, not its near edge. Aiming at the edge would pile
+  //     every migrant onto the boundary and rebuild the cluster one region over; aiming at the
+  //     centre means each organism stops wherever it first finds food, which is a different
+  //     place for each of them. `stepToward` walks one step per tick, and this branch keeps
+  //     proposing the same destination until the ground underfoot is worth eating — at which
+  //     point branch 6 takes over and the migration ends by itself.
+  //
+  //     What this is measured to do, and what it is not. The branch is reachable and its behaviour
+  //     is pinned by constructed tests. Its world-level effect is regime-dependent, and the two
+  //     regimes were measured separately because the first measurement taken was the misleading
+  //     one.
+  //
+  //     Below the population ceiling, with room to grow, it works: three seeds over 400 ticks at
+  //     the default cap, paired against a control, put mean living population at 206.0/222.7/197.7
+  //     -> 218.4/231.2/215.0 and mean regions occupied at 13.79/14.30/14.56 -> 15.12/15.54/15.60.
+  //     Every seed moves the same way on both metrics; paired t(2) is 5.00 on population and 14.07
+  //     on occupancy against a critical 4.30. Spreading the world out is exactly what this branch
+  //     is for, and it costs roughly 36% more tick time in that regime because tick cost is
+  //     superlinear in living organisms.
+  //
+  //     At the ceiling it does nothing, and cannot: at `maxOrganisms: 140` over 600 ticks the two
+  //     arms hold 119.1/118.7/118.9 living organisms each, identical to the decimal, at -0.1% time.
+  //     A world pinned at its cap has no headroom for a healthier population to occupy.
+  //
+  //     An earlier measurement over 300 ticks on population-capped fixtures found nothing and was
+  //     reported as a null result. It was regime-bound rather than wrong: at that horizon branch
+  //     13's blind jitter and reproduction at the frontier have already saturated dispersal, and
+  //     the directed effect has nothing left to add.
+  //
+  //     None of this demonstrates a fix for production, whose clustering took ~15,000 ticks to
+  //     form and which no affordable fixture reproduces. That remains open and unproven.
+  if (energyRatio < 620 && observation.environment.richerNeighbours.length > 0) {
+    let nearest = observation.environment.richerNeighbours[0];
+    for (const candidate of observation.environment.richerNeighbours) {
+      if (nearest === undefined || candidate.distanceCu < nearest.distanceCu) nearest = candidate;
+    }
+    if (nearest !== undefined && canReach(nearest.distanceCu)) {
+      return { type: 'move', target: makePosition(nearest.centre.x, nearest.centre.z) };
+    }
+  }
+
+  // 6c. Walk to a node. Nothing underfoot, and nowhere better next door — so the bounded quantity
+  //     in a distant node is the best food this organism can see. Ordered below migration because
+  //     a node sits in the region being left; ordered above the crumb because a journey to real
+  //     food beats a mouthful of nothing.
+  if (energyRatio < 620) {
+    const travel = nearestFeeding(observation, canReach, true);
+    if (travel) return travel;
+  }
+
+  // 6d. Graze the crumb after all. Nothing in reach, nothing better next door, nowhere worth
+  //     walking, and the ground holds less than a meal — so a mouthful of what is left beats
+  //     resting on it. This keeps a uniformly stripped world behaving exactly as it did before 6b
+  //     existed; only an organism with somewhere better to go now walks past the crumb.
+  if (energyRatio < 620 && observation.environment.biomass > 0) {
+    return { type: 'consume', targetKind: 'biomass' };
   }
 
   const carried = self.inventory.reduce((sum, e) => sum + e.quantity, 0);
@@ -392,9 +477,10 @@ export function decideHeuristically(observation: Observation, seed: number): Age
     return { type: 'signal', channel: alarm ? 'alarm' : 'food', intensity: 500 };
   }
 
-  // 12. Top up before wandering, weighted by the forage drive.
+  // 12. Top up before wandering, weighted by the forage drive. Reached only above branch 6's
+  //     hunger line, so this organism is not a migration candidate and may travel to a node.
   if (energyRatio < 900 && rng.chance(clampPerMille(drives.forage))) {
-    const feed = nearestFeeding(observation, canReach);
+    const feed = nearestFeeding(observation, canReach, true);
     if (feed) return feed;
     if (observation.environment.biomass > 0) {
       return { type: 'consume', targetKind: 'biomass' };
@@ -431,6 +517,7 @@ const BIOMASS_ENERGY_PER_UNIT = 5;
 function nearestFeeding(
   observation: Observation,
   canReach: (distanceCu: number) => boolean,
+  allowTravel: boolean,
 ): AgentAction | null {
   let best: (typeof observation.resources)[number] | undefined;
   for (const r of observation.resources) {
@@ -444,8 +531,12 @@ function nearestFeeding(
       best = r;
   }
 
+  //    The biomass floor is `WORTH_FEEDING_MU`, the same number the observable uses, and not the
+  //    `> 200` it used to be. This test reads as "is the ground better than that node" and acted as
+  //    "is there anything at all underfoot", which is why it captured the turn of every organism in
+  //    a stripped region and made the migration branch below unreachable.
   const biomassIsBetter =
-    observation.environment.biomass > 200 &&
+    observation.environment.biomass >= WORTH_FEEDING_MU &&
     (!best || best.nutritionPerUnit <= BIOMASS_ENERGY_PER_UNIT || best.distanceCu > 420);
   if (biomassIsBetter) return { type: 'consume', targetKind: 'biomass' };
 
@@ -453,7 +544,13 @@ function nearestFeeding(
   if (best.distanceCu <= 420) {
     return { type: 'consume', targetKind: 'resourceNode', targetId: best.resourceNodeId };
   }
-  if (canReach(best.distanceCu)) {
+  //    Walking to a node is a *journey*, not a meal, so the caller decides whether to take it. A
+  //    hungry organism standing in a stripped region has a better journey available — the region
+  //    next door holds renewable biomass at its cap, where a node holds a bounded quantity and, by
+  //    construction, sits in the region it is trying to leave. Measured: with this returned
+  //    unconditionally, migrants walked ~2000 cu out and were pulled back to a node for the next
+  //    240 ticks, drifting a net 10 cu per tick against a speed of 40-120.
+  if (allowTravel && canReach(best.distanceCu)) {
     return { type: 'move', target: best.position };
   }
   return null;

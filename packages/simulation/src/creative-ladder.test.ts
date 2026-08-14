@@ -133,6 +133,7 @@ function observationOf(options: {
       pressure: 'none',
       pressureSeverity: 0,
       atPopulationCeiling: true,
+      richerNeighbours: [],
     },
     organisms: [],
     resources: [],

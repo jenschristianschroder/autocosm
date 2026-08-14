@@ -203,6 +203,38 @@ export interface ObservedRecipe {
   readonly label: string;
 }
 
+/**
+ * How much food a patch of ground must hold before it is worth a turn.
+ *
+ * Grounded in appetite rather than chosen: `applyConsume` takes `mass / 25 + up to 24` mu per
+ * graze, so a typical meal is 30-60 mu and 300 mu is several of them. It is 5% of the 6000 mu
+ * regional cap, so ground anywhere near full clears it by 20x and the threshold is invisible in a
+ * healthy world.
+ *
+ * It lives in the domain because two places must agree on it and the rule is only coherent if
+ * they do: `observe()` uses it to decide whether a neighbouring region is worth reporting, and a
+ * policy uses it to decide whether the ground underfoot is worth eating. The symmetry is the
+ * point — an organism leaves for ground that has what its own ground lacks, measured the same way
+ * on both sides. Split the two and you get an organism that will not walk to food it can see, or
+ * one that walks away from food it is standing on.
+ */
+export const WORTH_FEEDING_MU = 300;
+
+/**
+ * An adjacent region holding meaningfully more food than the ground underfoot.
+ *
+ * `centre` is a move target rather than a bearing, because `applyMove` takes a destination and
+ * `stepToward` walks toward it one step at a time. A policy proposing this position keeps
+ * proposing it, tick after tick, until it arrives — which is what turns a single observation
+ * into a migration.
+ */
+export interface ObservedNeighbourRegion {
+  readonly regionId: RegionId;
+  readonly biomass: number;
+  readonly centre: Position;
+  readonly distanceCu: number;
+}
+
 export interface ObservedEnvironment {
   readonly biome: Biome;
   readonly lightPerMille: PerMille;
@@ -226,6 +258,27 @@ export interface ObservedEnvironment {
    * 99% of every rejection in the world.
    */
   readonly atPopulationCeiling: boolean;
+  /**
+   * Adjacent regions holding meaningfully more food than this one, richest first.
+   *
+   * `biomass` above is the observer's *own* region and nothing else, which made starvation in a
+   * crowded region unresolvable by any policy: an organism could perceive that the ground was
+   * bare but not that the ground next door was not. The only branch that relocated it was an
+   * undirected jitter of a few hundred cu against a 6000 cu region, so escaping a stripped
+   * region needed a long run of lucky steps while hunger kept firing on the crumbs underfoot.
+   *
+   * Measured in production at tick 15,208: 319 organisms in `r2x6` on 193 mu of biomass, 44 in
+   * `r4x7`, and every one of the other 23 regions in a radius-2 window empty and pinned at the
+   * 6000 mu cap. The world was not short of food. It was short of food where anybody stood —
+   * which is why raising `biomassRegenAtFullLight` 60 -> 180 moved nothing at all. A fresh local
+   * world reproduces the same shape by tick 250: 17 of 64 regions occupied, 47 full and empty.
+   *
+   * Reported only when a neighbour clears both a ratio and an absolute floor, so a well-spread
+   * world usually reports nothing and pays nothing — in observation size or in prompt tokens.
+   * Bounded at eight by the geometry: a region has eight neighbours and this never looks past
+   * them.
+   */
+  readonly richerNeighbours: readonly ObservedNeighbourRegion[];
 }
 
 export interface ObservedMemory {
@@ -368,6 +421,16 @@ export const ObservationSchema = z.object({
     pressure: boundedText(32),
     pressureSeverity: perMille,
     atPopulationCeiling: z.boolean(),
+    richerNeighbours: z
+      .array(
+        z.object({
+          regionId: brandedId<'RegionId'>(),
+          biomass: z.number().finite(),
+          centre: positionSchema,
+          distanceCu: z.number().finite(),
+        }),
+      )
+      .max(8),
   }),
   organisms: z
     .array(

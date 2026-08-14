@@ -55,6 +55,7 @@ function anObservation(): Observation {
       pressure: 'none',
       pressureSeverity: 0,
       atPopulationCeiling: false,
+      richerNeighbours: [],
     },
     organisms: [],
     resources: [],

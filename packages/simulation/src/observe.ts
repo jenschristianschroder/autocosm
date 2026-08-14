@@ -6,16 +6,20 @@ import {
   MAX_OBSERVED_RESOURCES,
   MAX_OBSERVED_SIGNALS,
   MAX_OBSERVED_STRUCTURES,
+  WORTH_FEEDING_MU,
   ambientLightPerMille,
   clampPerMille,
   derivePhenotype,
   distance,
+  regionCentre,
+  regionCoordFromId,
   regionNeighbourhood,
   scaleByPerMille,
   type Observation,
   type ObservedEnvironment,
   type ObservedGoal,
   type ObservedMemory,
+  type ObservedNeighbourRegion,
   type ObservedOrganism,
   type ObservedResource,
   type ObservedSelf,
@@ -84,6 +88,55 @@ const DEPOSIT_LANDMARK_BONUS_CU = 1200;
  */
 export function resourceVisibilityRadiusCu(perceptionRadiusCu: number, quantity: number): number {
   return perceptionRadiusCu + Math.min(DEPOSIT_LANDMARK_BONUS_CU, Math.max(0, quantity) * 2);
+}
+
+/**
+ * How much more food a neighbouring region must hold before it is worth reporting.
+ *
+ * Two tests, and both are needed. The ratio makes the signal scale-free: it fires the same way in
+ * a rich world and a poor one, and it will not send an organism away from ground that is merely
+ * slightly worse than next door. The absolute floor stops a bare region from advertising a
+ * marginally less bare one — 1 mu is twice 0 mu, and a crossing paid for in energy must have
+ * something at the end of it.
+ *
+ * The floor is `WORTH_FEEDING_MU`, the same threshold a policy applies to the ground underfoot,
+ * because the comparison is only coherent if both sides are measured the same way.
+ */
+const RICHER_NEIGHBOUR_RATIO = 2;
+
+/**
+ * Adjacent regions holding meaningfully more food than the observer's own, richest first.
+ *
+ * Sorted by biomass descending rather than by distance, so that if this ever has to be truncated
+ * the best options survive. Ties break on `regionId`, which is stable, because tick determinism
+ * depends on every list an agent sees being ordered the same way in every process.
+ *
+ * Costs eight map lookups. It deliberately does not count organisms per region, even though
+ * crowding is the underlying problem: grazing removes biomass, so a region that fills up strips
+ * itself and stops advertising within a tick or two. Biomass is the crowding signal, lagged.
+ * If the occupancy measurement shows that lag is too slow, add the headcount then — measured,
+ * rather than paid for up front.
+ */
+function richerNeighbours(draft: WorldState, organism: Organism): ObservedNeighbourRegion[] {
+  const localBiomass = draft.regions.get(organism.regionId)?.biomass ?? 0;
+  const threshold = Math.max(localBiomass * RICHER_NEIGHBOUR_RATIO, WORTH_FEEDING_MU);
+  const found: ObservedNeighbourRegion[] = [];
+  for (const id of regionNeighbourhood(organism.regionId)) {
+    if (id === organism.regionId) continue;
+    const region = draft.regions.get(id);
+    if (!region || region.biomass < threshold) continue;
+    const coord = regionCoordFromId(id);
+    if (!coord) continue;
+    const centre = regionCentre(coord);
+    found.push({
+      regionId: id,
+      biomass: region.biomass,
+      centre,
+      distanceCu: distance(organism.position, centre),
+    });
+  }
+  found.sort((a, b) => b.biomass - a.biomass || a.regionId.localeCompare(b.regionId));
+  return found;
 }
 
 /**
@@ -166,6 +219,7 @@ export function observe(
     // (`evolution.ts` -> `countLivingOrganisms(draft) >= config.maxOrganisms`), so the
     // observable and the rule cannot drift into disagreeing.
     atPopulationCeiling: countLivingOrganisms(draft) >= config.maxOrganisms,
+    richerNeighbours: richerNeighbours(draft, organism),
   };
 
   const organisms: ObservedOrganism[] = [];
